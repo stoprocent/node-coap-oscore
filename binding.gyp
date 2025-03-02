@@ -58,6 +58,12 @@
               'outputs' : [""],
               'action': [ "node -p \"require('replace')({regex:'WEAK nvm_',replacement:'weak_nvm_',paths:['<(_inputs)']})\""]
             },
+            {
+              'action_name': 'replace weak attributes with static inline',
+              'inputs': ['..\\external\\uoscore-uedhoc\\externals\\zcbor\\src\\zcbor_common.c'],
+              'outputs' : [""],
+              'action': [ "node -p \"require('replace')({regex:'__attribute__\(\(__weak__\)\)',replacement:'static inline',paths:['<(_inputs)']})\""]
+            },
           ],
           'msvs_settings': {
             'VCCLCompilerTool': {
