@@ -54,6 +54,7 @@ jobs:
         with:
           submodules: recursive
       - run: npm ci
+      - run: ls -lA .external/uoscore-uedhoc/externals/tinycrypt
       - run: npm run ${{ matrix.command }} -- ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
         with:
