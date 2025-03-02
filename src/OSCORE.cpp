@@ -53,11 +53,11 @@ class OSCORE : public Napi::ObjectWrap<OSCORE> {
       ContextStatus contextStatus = static_cast<ContextStatus>(jsContextStatus);
       
       struct oscore_init_params oscore_params = {
-        { .ptr = masterSecret.Data(), .len = (uint32_t)masterSecret.Length() },
-        { .ptr = senderId.Data(),  .len = (uint32_t)senderId.Length() },
-        { .ptr = recipientId.Data(), .len = (uint32_t)recipientId.Length() },
-        { .ptr = idContext.Data(), .len = (uint32_t)idContext.Length() },
-        { .ptr = masterSalt.Data(), .len = (uint32_t)masterSalt.Length() },
+        { static_cast<uint32_t>(masterSecret.Length()), (uint8_t *)masterSecret.Data() },
+        { static_cast<uint32_t>(senderId.Length()), (uint8_t *)senderId.Data() },
+        { static_cast<uint32_t>(recipientId.Length()), (uint8_t *)recipientId.Data() },
+        { static_cast<uint32_t>(idContext.Length()), (uint8_t *)idContext.Data() },
+        { static_cast<uint32_t>(masterSalt.Length()), (uint8_t *)masterSalt.Data() },
         OSCORE_AES_CCM_16_64_128,
         OSCORE_SHA_256,
         (contextStatus == ContextStatus::Fresh)
