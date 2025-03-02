@@ -25,7 +25,7 @@
         "<!@(node -p \"require('fs').readdirSync('./src').map(f=>'src/'+f).join(' ')\")"
       ],
       'include_dirs': [
-        "<!@(node -p \"require('node-addon-api').include_dir\")",
+        "<!@(node -p \"require('node-addon-api').include\")",
         "external/uoscore-uedhoc/inc",
         "external/uoscore-uedhoc/inc/cbor",
         "external/uoscore-uedhoc/inc/common",
@@ -35,6 +35,7 @@
         "external/uoscore-uedhoc/externals/mbedtls/library",
         "include"
       ],
+      
       'cflags!': [ '-fno-exceptions', '-std=c99' ],
       'cflags_cc!': [ '-fno-exceptions', '-std=c++20' ],
       'xcode_settings': {
