@@ -12,7 +12,7 @@ export interface OscoreContext {
     recipientId: Buffer,
     idContext: Buffer,
     status: OscoreContextStatus,
-    ssn: BigInt,
+    ssn?: BigInt,
 }
 
 export declare class OSCORE extends EventEmitter {
