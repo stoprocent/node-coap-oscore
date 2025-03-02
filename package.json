@@ -1,0 +1,45 @@
+{
+  "name": "oscore",
+  "description": "A Node.js implementation of OSCORE (Object Security for Constrained RESTful Environments) protocol, providing end-to-end security for IoT applications and other constrained environments using CBOR Object Signing and Encryption.",
+  "version": "0.0.1",
+  "main": "dist/index.js",
+  "scripts": {
+    "debug": "npx node-gyp build --debug",
+    "install": "node-gyp-build",
+    "lint": "eslint .",
+    "prebuildify": "prebuildify --napi --target 17.0.0 --force --strip --verbose",
+    "prebuildify-cross": "prebuildify-cross --napi --target 17.0.0 --force --strip --verbose",
+    "semantic-release": "semantic-release",
+    "pretest": "npm run rebuild",
+    "rebuild": "node-gyp rebuild",
+    "test": "mocha --recursive \"test/*.test.js\" \"test/**/*.test.js\" --exit"
+  },
+  "private": false,
+  "gypfile": true,
+  "license": "MIT",
+  "dependencies": {
+    "bindings": "^1.5.0",
+    "node-addon-api": "^8.0.0",
+    "node-gyp-build": "^4.8.1"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.3.0",
+    "@commitlint/config-conventional": "^19.2.2",
+    "@eslint/js": "^9.7.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/exec": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^10.1.1",
+    "@types/elliptic": "^6.4.18",
+    "@types/eslint__js": "^8.42.3",
+    "@types/node": "^22.13.4",
+    "eslint": "^8.57.0",
+    "mocha": "^10.7.0",
+    "nyc": "^17.0.0",
+    "prebuildify": "^6.0.1",
+    "prebuildify-cross": "^5.1.0",
+    "semantic-release": "^24.0.0",
+    "typescript": "^5.5.4",
+    "typescript-eslint": "^7.17.0"
+  }
+}

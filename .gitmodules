@@ -1,0 +1,3 @@
+[submodule "external/uoscore-uedhoc"]
+	path = external/uoscore-uedhoc
+	url = https://github.com/stoprocent/uoscore-uedhoc.git
