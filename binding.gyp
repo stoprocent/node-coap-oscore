@@ -51,6 +51,14 @@
           'defines': [
             '_Static_assert=static_assert'
           ],
+          'actions' : [
+            {
+              'action_name': 'replace weak nvm funtions',
+              'inputs': ['..\\external\\uoscore-uedhoc\\src\\oscore\\nvm.c'],
+              'outputs' : [""],
+              'action': [ "node -p \"require('replace')({regex:'WEAK nvm_',replacement:'weak_nvm_',paths:['<(_inputs)']})\""]
+            },
+          ],
           'msvs_settings': {
             'VCCLCompilerTool': {
               'AdditionalOptions': [ '-std:c++20', ],
