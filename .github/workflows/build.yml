@@ -12,16 +12,16 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: darwin-x64
-            os: macos-12 
-            node: x64
-            command: prebuildify
-            args: --arch x64
-          - name: darwin-arm64
-            os: macos-12 
-            node: x64
-            command: prebuildify
-            args: --arch arm64
+          # - name: darwin-x64
+          #   os: macos-12 
+          #   node: x64
+          #   command: prebuildify
+          #   args: --arch x64
+          # - name: darwin-arm64
+          #   os: macos-12 
+          #   node: x64
+          #   command: prebuildify
+          #   args: --arch arm64
           - name: win32-x86
             os: windows-2019
             node: x86
@@ -30,18 +30,18 @@ jobs:
             os: windows-2019
             node: x64
             command: prebuildify
-          - name: linux-x64
-            os: ubuntu-latest
-            command: prebuildify-cross
-            args: -i centos7-devtoolset7 -i alpine
-          - name: linux-arm
-            os: ubuntu-latest
-            command: prebuildify-cross
-            args: -i linux-arm64-lts -i linux-armv7 -i linux-armv6
-          - name: android-arm
-            os: ubuntu-latest
-            command: prebuildify-cross
-            args: -i android-arm64 -i android-armv7
+          # - name: linux-x64
+          #   os: ubuntu-latest
+          #   command: prebuildify-cross
+          #   args: -i centos7-devtoolset7 -i alpine
+          # - name: linux-arm
+          #   os: ubuntu-latest
+          #   command: prebuildify-cross
+          #   args: -i linux-arm64-lts -i linux-armv7 -i linux-armv6
+          # - name: android-arm
+          #   os: ubuntu-latest
+          #   command: prebuildify-cross
+          #   args: -i android-arm64 -i android-armv7
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     steps:
