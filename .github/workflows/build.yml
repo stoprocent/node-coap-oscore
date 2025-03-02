@@ -53,6 +53,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Remove __attribute__ for Windows
+        if: contains(matrix.os, 'windows')
+        shell: bash
+        run: |
+          find external/ -type f \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 sed -i -E "s/__attribute__\(\(__weak__\)\)/static inline/g"
+          find external/ -type f \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 sed -i -E "s/__attribute__\(\([^)]*\)\)//g"
+          find external/ -type f \( -name "nvm.c" -o \) -print0 | xargs -0 sed -i -E "s/WEAK nvm_/weak_nvm_/g"
       - run: npm ci
       - run: npm run ${{ matrix.command }} -- ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
