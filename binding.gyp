@@ -12,13 +12,13 @@
         'OSCORE_NVM_SUPPORT=1',
         'OSCORE_MAX_URI_PATH_LEN=128',
         'K_SSN_NVM_STORE_INTERVAL=1',
-        'TINYCRYPT=1',
+        'MBEDTLS=1',
         'C_I_SIZE=7',
         'C_R_SIZE=7'
       ],
       "sources": [ 
         "<!@(node -p \"require('fs').readdirSync('./external/uoscore-uedhoc/externals/zcbor/src').filter(f=>f.endsWith('.c')).map(f=>'external/uoscore-uedhoc/externals/zcbor/src/'+f).join(' ')\")",
-        "<!@(node -p \"require('fs').readdirSync('./external/uoscore-uedhoc/externals/tinycrypt/lib/source').filter(f=>f.endsWith('.c')).map(f=>'external/uoscore-uedhoc/externals/tinycrypt/lib/source/'+f).join(' ')\")",
+        "<!@(node -p \"require('fs').readdirSync('./external/uoscore-uedhoc/externals/mbedtls/library').filter(f=>f.endsWith('.c')).map(f=>'external/uoscore-uedhoc/externals/mbedtls/library/'+f).join(' ')\")",
         "<!@(node -p \"require('fs').readdirSync('./external/uoscore-uedhoc/src/cbor').filter(f=>!f.startsWith('edhoc')).filter(f=>f.endsWith('.c')).map(f=>'external/uoscore-uedhoc/src/cbor/'+f).join(' ')\")",
         "<!@(node -p \"require('fs').readdirSync('./external/uoscore-uedhoc/src/common').filter(f=>f.endsWith('.c')).map(f=>'external/uoscore-uedhoc/src/common/'+f).join(' ')\")",
         "<!@(node -p \"require('fs').readdirSync('./external/uoscore-uedhoc/src/oscore').filter(f=>f.endsWith('.c')).map(f=>'external/uoscore-uedhoc/src/oscore/'+f).join(' ')\")",
@@ -31,7 +31,8 @@
         "external/uoscore-uedhoc/inc/common",
         "external/uoscore-uedhoc/inc/oscore",
         "external/uoscore-uedhoc/externals/zcbor/include",
-        "external/uoscore-uedhoc/externals/tinycrypt/lib/include",
+        "external/uoscore-uedhoc/externals/mbedtls/include",
+        "external/uoscore-uedhoc/externals/mbedtls/library",
         "include"
       ],
       'dependencies': [
