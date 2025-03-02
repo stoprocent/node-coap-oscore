@@ -30,8 +30,7 @@ class OSCORE : public Napi::ObjectWrap<OSCORE> {
       Napi::Env env = info.Env();
       Napi::HandleScope scope(env);
 
-      std::cout << "OSCORE constructor" << std::endl;
-
+      // Get secure context
       this->secureContext = Napi::Persistent(info[0].As<Napi::Object>());
 
       Napi::Buffer<uint8_t> masterSecret = this->secureContext.Get("masterSecret").As<Napi::Buffer<uint8_t>>();
@@ -43,15 +42,18 @@ class OSCORE : public Napi::ObjectWrap<OSCORE> {
       bool lossless;
       this->senderSequenceNumber = this->secureContext.Get("ssn").As<Napi::BigInt>().Uint64Value(&lossless);
 
+      // Check sender sequence number
       if (!lossless) {
         Napi::TypeError::New(env, "Sender sequence number is not a valid uint64_t")
           .ThrowAsJavaScriptException();
         return;
       }
 
+      // Get context status
       uint32_t jsContextStatus = this->secureContext.Get("status").As<Napi::Number>().Uint32Value();
       ContextStatus contextStatus = static_cast<ContextStatus>(jsContextStatus);
-      
+
+      // Initialize OSCORE parameters
       struct oscore_init_params oscore_params = {
         { static_cast<uint32_t>(masterSecret.Length()), (uint8_t *)masterSecret.Data() },
         { static_cast<uint32_t>(senderId.Length()), (uint8_t *)senderId.Data() },
@@ -63,6 +65,15 @@ class OSCORE : public Napi::ObjectWrap<OSCORE> {
         (contextStatus == ContextStatus::Fresh)
       };
 
+      // Register in SecurityContextRegistry
+      struct nvm_key_t nvm_key = { 
+        .sender_id = oscore_params.sender_id,
+        .recipient_id = oscore_params.recipient_id,
+        .id_context = oscore_params.id_context 
+      };
+      SecurityContextRegistry::getInstance()->registerContext(&nvm_key, this);
+
+      // Initialize OSCORE context
       this->context = {};
       err status = oscore_context_init(&oscore_params, &this->context);
 
@@ -71,8 +82,6 @@ class OSCORE : public Napi::ObjectWrap<OSCORE> {
             .ThrowAsJavaScriptException();
         return;
       }
-      // Register context in SecurityContextRegistry
-      this->registerContext();
     }
 
     ~OSCORE() {
@@ -133,17 +142,7 @@ class OSCORE : public Napi::ObjectWrap<OSCORE> {
     struct context context;
     Napi::ObjectReference self;
     Napi::ObjectReference secureContext;
-    
-    void registerContext() {
-      // Build nvm_key_t from context
-      struct nvm_key_t nvm_key = { 
-        .sender_id = this->context.sc.sender_id,
-        .recipient_id = this->context.rc.recipient_id,
-        .id_context = this->context.cc.id_context 
-      };
-      // Register context in SecurityContextRegistry
-      SecurityContextRegistry::getInstance()->registerContext(&nvm_key, this);
-    }
+
 };
 
 extern "C" enum err nvm_write_ssn(const struct nvm_key_t *nvm_key, uint64_t ssn) {

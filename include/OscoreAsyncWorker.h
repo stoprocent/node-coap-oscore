@@ -53,6 +53,7 @@ class OscoreAsyncWorker : public Napi::AsyncWorker {
   std::vector<uint8_t> inputBuffer;
   std::vector<uint8_t> outputBuffer;
   CallbackType callback;
+  err status;
 };
 
 #endif  // OSCORE_ASYNC_WORKER_H

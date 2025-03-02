@@ -1,6 +1,3 @@
-#include <thread>
-#include <chrono>
-
 #include "OscoreAsyncWorker.h"
 #include "OscoreError.h"
 
@@ -15,14 +12,12 @@ OscoreAsyncWorker::OscoreAsyncWorker(Napi::Env& env,
       direction(direction),
       inputBuffer(buffer.Data(), buffer.Data() + buffer.Length()),
       outputBuffer(10240),
-      callback(std::move(callback)) {}
+      callback(std::move(callback)),
+      status(ok) {}
 
 void OscoreAsyncWorker::Execute() {
   try {
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-
     uint32_t outputBufferLength = 0;
-    err status;
 
     if (direction == Direction::Encode) {
       if ((status = coap2oscore((uint8_t *)inputBuffer.data(), inputBuffer.size(), outputBuffer.data(), &outputBufferLength, &context)) != ok) {
@@ -54,6 +49,7 @@ void OscoreAsyncWorker::OnOK() {
 void OscoreAsyncWorker::OnError(const Napi::Error& error) {
   Napi::Env env = Env();
   Napi::HandleScope scope(env);
+  error.Set("status", Napi::Number::New(env, status));
   deferred.Reject(error.Value());
   callback(env);
 }
