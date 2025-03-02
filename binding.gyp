@@ -35,7 +35,9 @@
         "external/uoscore-uedhoc/externals/mbedtls/library",
         "include"
       ],
-      
+      'dependencies': [
+        "<!(node -p \"require('node-addon-api').gyp\")"
+      ],
       'cflags!': [ '-fno-exceptions', '-std=c99' ],
       'cflags_cc!': [ '-fno-exceptions', '-std=c++20' ],
       'xcode_settings': {
