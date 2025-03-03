@@ -32,26 +32,32 @@ class OSCORE : public Napi::ObjectWrap<OSCORE> {
 
       // Get secure context
       this->secureContext = Napi::Persistent(info[0].As<Napi::Object>());
-
+            
       Napi::Buffer<uint8_t> masterSecret = this->secureContext.Get("masterSecret").As<Napi::Buffer<uint8_t>>();
       Napi::Buffer<uint8_t> senderId = this->secureContext.Get("senderId").As<Napi::Buffer<uint8_t>>();
       Napi::Buffer<uint8_t> recipientId = this->secureContext.Get("recipientId").As<Napi::Buffer<uint8_t>>();
       Napi::Buffer<uint8_t> idContext = this->secureContext.Get("idContext").As<Napi::Buffer<uint8_t>>();
       Napi::Buffer<uint8_t> masterSalt = this->secureContext.Get("masterSalt").As<Napi::Buffer<uint8_t>>();
       
-      bool lossless;
-      this->senderSequenceNumber = this->secureContext.Get("ssn").As<Napi::BigInt>().Uint64Value(&lossless);
-
-      // Check sender sequence number
-      if (!lossless) {
-        Napi::TypeError::New(env, "Sender sequence number is not a valid uint64_t")
-          .ThrowAsJavaScriptException();
-        return;
+      // Check if ssn exists in secureContext, if not default to 0
+      if (this->secureContext.Value().As<Napi::Object>().Has("ssn")) {
+        bool lossless;
+        this->senderSequenceNumber = this->secureContext.Get("ssn").As<Napi::BigInt>().Uint64Value(&lossless);
+        if (!lossless) {
+          Napi::TypeError::New(env, "Sender sequence number is not a valid uint64_t")
+            .ThrowAsJavaScriptException();
+          return;
+        }
+      } else {
+        this->senderSequenceNumber = 0;
       }
 
       // Get context status
-      uint32_t jsContextStatus = this->secureContext.Get("status").As<Napi::Number>().Uint32Value();
-      ContextStatus contextStatus = static_cast<ContextStatus>(jsContextStatus);
+      ContextStatus contextStatus = ContextStatus::Fresh;
+      if (this->secureContext.Value().As<Napi::Object>().Has("status")) {
+        uint32_t jsContextStatus = this->secureContext.Get("status").As<Napi::Number>().Uint32Value();
+        contextStatus = static_cast<ContextStatus>(jsContextStatus);
+      }
 
       // Initialize OSCORE parameters
       struct oscore_init_params oscore_params = {
