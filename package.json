@@ -1,5 +1,5 @@
 {
-  "name": "oscore",
+  "name": "coap-oscore",
   "description": "A Node.js implementation of OSCORE (Object Security for Constrained RESTful Environments) protocol, providing end-to-end security for IoT applications and other constrained environments using CBOR Object Signing and Encryption.",
   "version": "0.0.1",
   "main": "dist/index.js",
