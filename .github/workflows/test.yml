@@ -45,6 +45,13 @@ jobs:
     - uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
+    - name: Patching C code for Windows
+      if: contains(matrix.config.os, 'windows')
+      shell: bash
+      run: |
+        find external/ -type f \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 sed -i -E "s/__attribute__\(\(__weak__\)\)/static inline/g"
+        find external/ -type f \( -name "*.c" -o -name "*.h" \) -print0 | xargs -0 sed -i -E "s/__attribute__\(\([^)]*\)\)//g"
+        find external/ -type f -name "nvm.c" -print0 | xargs -0 sed -i -E "s/WEAK nvm_/weak_nvm_/g"
     - run: npm ci
     - run: npm run rebuild
     - run: npx tsc
