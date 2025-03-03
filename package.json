@@ -3,6 +3,19 @@
   "description": "A Node.js implementation of OSCORE (Object Security for Constrained RESTful Environments) protocol, providing end-to-end security for IoT applications and other constrained environments using CBOR Object Signing and Encryption.",
   "version": "0.0.1",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "Marek Serafin <marek@serafin.email>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stoprocent/node-coap-oscore.git"
+  },
+  "homepage": "https://github.com/stoprocent/node-coap-oscore",
+  "keywords": [
+    "oscore",
+    "coap",
+    "iot",
+    "security"
+  ],
   "scripts": {
     "debug": "npx node-gyp build --debug",
     "install": "node-gyp-build",
