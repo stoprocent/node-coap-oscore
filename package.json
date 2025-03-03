@@ -19,7 +19,7 @@
   "scripts": {
     "debug": "npx node-gyp build --debug",
     "install": "node-gyp-build",
-    "postinstall": "patch-package",
+    "prepare": "patch-package",
     "lint": "eslint .",
     "prebuildify": "prebuildify --napi --target 20.0.0 --force --strip --verbose",
     "prebuildify-cross": "prebuildify-cross --napi --target 20.0.0 --force --strip --verbose",
@@ -34,10 +34,10 @@
   "dependencies": {
     "bindings": "^1.5.0",
     "node-addon-api": "^8.3.1",
-    "node-gyp-build": "^4.8.4",
-    "patch-package": "^8.0.0"
+    "node-gyp-build": "^4.8.4"
   },
   "devDependencies": {
+    "patch-package": "^8.0.0",
     "@commitlint/cli": "^19.3.0",
     "@commitlint/config-conventional": "^19.2.2",
     "@eslint/js": "^9.7.0",
