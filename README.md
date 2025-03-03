@@ -1,6 +1,6 @@
 # OSCORE for Node.js
 
-[![npm version](https://img.shields.io/npm/v/oscore.svg)](https://www.npmjs.com/package/oscore)
+[![npm version](https://img.shields.io/npm/v/coap-oscore.svg)](https://www.npmjs.com/package/coap-oscore)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A high-performance TypeScript implementation of Object Security for Constrained RESTful Environments (OSCORE) for Node.js. This native addon is built on the robust [`uoscore-uedhoc`](https://github.com/eriptic/uoscore-uedhoc) C library, providing standards-compliant implementation of [RFC 8613](https://datatracker.ietf.org/doc/rfc8613/).
