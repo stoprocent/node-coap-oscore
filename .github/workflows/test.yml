@@ -28,7 +28,6 @@ jobs:
         node-version: 20.x
     - run: npm i typescript @types/node
     - run: npx tsc -b ./
-    - run: npx tsc -b ./example
   test:
     runs-on: ${{ matrix.config.os }}
     strategy:

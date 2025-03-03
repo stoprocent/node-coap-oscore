@@ -4,6 +4,7 @@ import { join } from 'path'
 import EventEmitter from 'events'
 
 export interface NodeGypBinding {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     OSCORE: { new(...args: any[]): OSCORE; prototype: any }
 }
 

@@ -69,7 +69,7 @@ export interface OscoreContext {
      * Defaults to 0 if not specified.
      * MUST be persisted and restored for Restored contexts.
      */
-    ssn?: BigInt,
+    ssn?: bigint,
 }
 
 /**
@@ -111,7 +111,7 @@ export declare class OSCORE extends EventEmitter {
      * @param listener - Callback function that receives the updated SSN value
      * @returns The OSCORE instance for chaining
      */
-    on: (eventName: 'ssn', listener: (ssn: BigInt) => void) => this;
+    on: (eventName: 'ssn', listener: (ssn: bigint) => void) => this;
 }
 
 export * from './bindings';

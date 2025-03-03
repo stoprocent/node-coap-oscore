@@ -1,6 +1,5 @@
 import { expect, describe, it, beforeEach, jest } from '@jest/globals';
 import { OSCORE, OscoreContextStatus, OscoreContext } from '../dist/index';
-import exp from 'constants';
 
 describe('OSCORE', () => {
   let oscoreClient: OSCORE;
