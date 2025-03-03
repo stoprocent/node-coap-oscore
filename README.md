@@ -118,7 +118,7 @@ Per [RFC 8613 Appendix B.1.2](https://www.rfc-editor.org/rfc/rfc8613.html#append
 Server implementation example:
 
 ```typescript
-import { OSCORE, OscoreContextStatus, OscoreError } from 'oscore';
+import { OSCORE, OscoreContextStatus, OscoreError } from 'coap-oscore';
 // Assumes a CoAP library
 
 async function handleSecureRequest(oscoreMessage, clientAddress) {
