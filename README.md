@@ -162,9 +162,9 @@ The library automatically handles the replay detection mechanism and will throw 
 
 - `OscoreContextStatus` - Indicates whether a context is newly created or restored
 
-### Error Codes
+### Errors
 
-- `status: 201` - Indicates a context rejection that requires the Echo option for replay protection
+- `OscoreError` - Enum containing error codes for OSCORE operations, including general errors (0-99) and OSCORE-specific errors (200+)
 
 For complete API documentation, see our [TypeScript API Docs](#).
 
