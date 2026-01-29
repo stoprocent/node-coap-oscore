@@ -68,7 +68,7 @@ export class OSCORE extends EventEmitter {
         checkSsnOverflow(this.ctx.ssn);
 
         const isReq = isRequest(pkt);
-        const { eOptions, uOptions } = splitOptions(pkt.options, isReq);
+        const { eOptions, uOptions } = splitOptions(pkt.options);
 
         // Build plaintext: [original_code, serialized_E_options, 0xFF, payload]
         const serializedEOpts = serializeOptionsOnly(eOptions);
@@ -152,7 +152,7 @@ export class OSCORE extends EventEmitter {
         }
 
         // Parse OSCORE option value
-        const { piv, kid, kidContext } = parseOscoreOptionValue(oscoreOpt.value);
+        const { piv, kid } = parseOscoreOptionValue(oscoreOpt.value);
 
         // Determine if this is a request (has KID in OSCORE option) or response
         const isReq = kid !== null;

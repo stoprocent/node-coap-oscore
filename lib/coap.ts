@@ -182,7 +182,7 @@ export function isEmptyAckOrRst(pkt: CoapPacket): boolean {
     return (pkt.type === TYPE_ACK || pkt.type === TYPE_RST) && pkt.code === CODE_EMPTY;
 }
 
-export function splitOptions(options: CoapOption[], isReq: boolean): { eOptions: CoapOption[]; uOptions: CoapOption[] } {
+export function splitOptions(options: CoapOption[]): { eOptions: CoapOption[]; uOptions: CoapOption[] } {
     const eOptions: CoapOption[] = [];
     const uOptions: CoapOption[] = [];
 

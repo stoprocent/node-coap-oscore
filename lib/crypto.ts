@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, hkdfSync } from 'node:crypto';
 import { encode as cborEncode } from 'cbor';
-import { AEAD_ALG_ID, KEY_LEN, NONCE_LEN, AUTH_TAG_LEN } from './constants';
+import { AEAD_ALG_ID, AUTH_TAG_LEN } from './constants';
 
 export function deriveKeyOrIV(
     masterSecret: Buffer,

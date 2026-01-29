@@ -157,7 +157,7 @@ describe('OSCORE', () => {
   });
 
   describe('ECHO option handling (RFC 9175)', () => {
-    const OPTION_ECHO = 252;
+    const OPTION_ECHO = '252';
 
     // Context for ECHO exchange vectors
     const echoContext: OscoreContext = {
@@ -190,7 +190,7 @@ describe('OSCORE', () => {
         token: Buffer.from([0x01]),
         options: [
           { name: 'Uri-Path', value: Buffer.from('test') },
-          { name: '252', value: echoValue },
+          { name: OPTION_ECHO, value: echoValue },
         ],
         payload: Buffer.from('hello'),
       });
@@ -216,7 +216,7 @@ describe('OSCORE', () => {
         token: Buffer.from([0x02]),
         options: [
           { name: 'Uri-Path', value: Buffer.from('test') },
-          { name: '252', value: echoValue },
+          { name: OPTION_ECHO, value: echoValue },
         ],
         payload: Buffer.from('hello'),
       });
@@ -261,7 +261,7 @@ describe('OSCORE', () => {
       // Decoded response should contain an ECHO option (252)
       const decodedPkt = parseCoap(decoded);
       const echoOpt = decodedPkt.options?.find(
-        (o: { name: string | number }) => String(o.name) === '252',
+        (o: { name: string | number }) => String(o.name) === OPTION_ECHO,
       );
       expect(echoOpt).toBeDefined();
     });
