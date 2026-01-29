@@ -69,3 +69,12 @@ export enum OscoreError {
   /* No response received */
   OSCORE_NO_RESPONSE = 224,
 }
+
+export class OscoreProtocolError extends Error {
+  public readonly status: OscoreError;
+  constructor(code: OscoreError, message?: string) {
+    super(message ?? `OSCORE error ${code}`);
+    this.status = code;
+    Object.setPrototypeOf(this, OscoreProtocolError.prototype);
+  }
+}

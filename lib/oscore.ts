@@ -1,117 +1,365 @@
 import EventEmitter from 'node:events';
+import {
+    CODE_POST, CODE_CHANGED, OPTION_OSCORE,
+    FLAG_KID, FLAG_KID_CTX, FLAG_PIV_MASK,
+    PAYLOAD_MARKER,
+} from './constants';
+import {
+    deserialize, serialize, isRequest, isEmptyAckOrRst,
+    splitOptions, mergeOptions, serializeOptionsOnly,
+    CoapOption,
+} from './coap';
+import { createAAD, createEncStructure, aesCcmEncrypt, aesCcmDecrypt } from './crypto';
+import {
+    SecurityContext, initSecurityContext,
+    ssnToPiv, pivToSsn, createNonce, checkSsnOverflow,
+} from './context';
+import { OscoreError, OscoreProtocolError } from './error';
 
-/**
- * The status of the OSCORE security context.
- */
 export enum OscoreContextStatus {
-    /**
-     * Indicates a newly created security context with fresh cryptographic material.
-     * This is the default state for newly created contexts.
-     */
     Fresh = 0,
-    
-    /**
-     * Indicates a security context that has been restored from persistent storage.
-     * Used when the same context needs to be maintained across application restarts.
-     */
     Restored = 1,
 }
 
-/**
- * The OSCORE security context parameters.
- */
 export interface OscoreContext {
-    /**
-     * The master secret used for deriving encryption keys.
-     * Must be securely generated and kept confidential.
-     */
-    masterSecret: Buffer,
-    
-    /**
-     * The master salt used in key derivation functions.
-     * Provides additional randomization for key derivation.
-     */
-    masterSalt: Buffer,
-    
-    /**
-     * The identifier of the sender (this device).
-     * Used in the OSCORE option and for key derivation.
-     */
+    masterSecret: Buffer;
+    masterSalt: Buffer;
+    senderId: Buffer;
+    recipientId: Buffer;
+    idContext: Buffer;
+    status?: OscoreContextStatus;
+    ssn?: bigint;
+}
+
+export class OSCORE extends EventEmitter {
+    private ctx: SecurityContext;
+
+    constructor(params: OscoreContext) {
+        super();
+
+        const status = params.status ?? OscoreContextStatus.Fresh;
+        const ssn = params.ssn ?? 0n;
+        const isFresh = status === OscoreContextStatus.Fresh;
+
+        this.ctx = initSecurityContext(
+            params.masterSecret,
+            params.masterSalt,
+            params.senderId,
+            params.recipientId,
+            params.idContext,
+            isFresh,
+            ssn,
+        );
+    }
+
+    encode = async (coapMessage: Buffer): Promise<Buffer> => {
+        if (coapMessage.length === 0) {
+            throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'Empty input');
+        }
+
+        const pkt = deserialize(coapMessage);
+
+        // Per RFC 8613 §4.2: empty ACK/RST bypass OSCORE
+        if (isEmptyAckOrRst(pkt)) {
+            return coapMessage;
+        }
+
+        // Check SSN overflow
+        checkSsnOverflow(this.ctx.ssn);
+
+        const isReq = isRequest(pkt);
+        const { eOptions, uOptions } = splitOptions(pkt.options, isReq);
+
+        // Build plaintext: [original_code, serialized_E_options, 0xFF, payload]
+        const serializedEOpts = serializeOptionsOnly(eOptions);
+        const plaintextParts: Buffer[] = [Buffer.from([pkt.code])];
+        if (serializedEOpts.length > 0 || pkt.payload.length > 0) {
+            plaintextParts.push(serializedEOpts);
+        }
+        if (pkt.payload.length > 0) {
+            plaintextParts.push(Buffer.from([PAYLOAD_MARKER]));
+            plaintextParts.push(pkt.payload);
+        }
+        const plaintext = Buffer.concat(plaintextParts);
+
+        // Generate PIV and increment SSN
+        const piv = ssnToPiv(this.ctx.ssn);
+        const currentSsn = this.ctx.ssn;
+        this.ctx.ssn++;
+
+        // Create nonce
+        const nonce = createNonce(this.ctx.senderId, piv, this.ctx.commonIv);
+
+        // Create AAD
+        const aad = createAAD(
+            isReq ? this.ctx.senderId : Buffer.alloc(0),
+            isReq ? piv : Buffer.alloc(0),
+        );
+        const encStructure = createEncStructure(aad);
+
+        // Encrypt
+        const ciphertext = aesCcmEncrypt(this.ctx.senderKey, nonce, plaintext, encStructure);
+
+        // Build OSCORE option value
+        const oscoreOptionValue = buildOscoreOptionValue(
+            isReq, piv, this.ctx.senderId, this.ctx.idContext,
+        );
+
+        // Build OSCORE option
+        const oscoreOption: CoapOption = {
+            number: OPTION_OSCORE,
+            value: oscoreOptionValue,
+        };
+
+        // Assemble output options: U-options + OSCORE option
+        const outOptions = [...uOptions, oscoreOption];
+
+        // Build output packet
+        const outPkt = {
+            version: pkt.version,
+            type: pkt.type,
+            tokenLength: pkt.token.length,
+            code: isReq ? CODE_POST : CODE_CHANGED,
+            messageId: pkt.messageId,
+            token: pkt.token,
+            options: outOptions,
+            payload: ciphertext,
+        };
+
+        const result = serialize(outPkt);
+        this.emit('ssn', currentSsn);
+
+        return result;
+    };
+
+    decode = async (oscoreMessage: Buffer): Promise<Buffer> => {
+        if (oscoreMessage.length === 0) {
+            throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'Empty input');
+        }
+
+        const pkt = deserialize(oscoreMessage);
+
+        // Find OSCORE option
+        const oscoreOpt = pkt.options.find(o => o.number === OPTION_OSCORE);
+        if (!oscoreOpt) {
+            throw new OscoreProtocolError(OscoreError.NOT_OSCORE_PKT, 'No OSCORE option found');
+        }
+
+        // Parse OSCORE option value
+        const { piv, kid, kidContext } = parseOscoreOptionValue(oscoreOpt.value);
+
+        // Determine if this is a request (has KID in OSCORE option) or response
+        const isReq = kid !== null;
+
+        if (isReq) {
+            // Verify KID matches recipientId
+            if (!kid!.equals(this.ctx.recipientId)) {
+                throw new OscoreProtocolError(
+                    OscoreError.OSCORE_KID_RECIPIENT_ID_MISMATCH,
+                    'KID does not match recipient ID',
+                );
+            }
+        }
+
+        // For requests, PIV must be present
+        const requestPiv = piv ?? Buffer.from([0]);
+        const requestKid = kid ?? Buffer.alloc(0);
+        const ssn = pivToSsn(requestPiv);
+
+        // Replay protection (only for requests)
+        if (isReq) {
+            if (!this.ctx.replayWindow.isValid(ssn)) {
+                throw new OscoreProtocolError(
+                    OscoreError.OSCORE_REPLAY_WINDOW_PROTECTION_ERROR,
+                    'Replay window protection error',
+                );
+            }
+        }
+
+        // Determine which ID to use for nonce: sender's ID from the message
+        const nonceId = isReq ? requestKid : this.ctx.senderId;
+        const nonce = createNonce(nonceId, requestPiv, this.ctx.commonIv);
+
+        // Create AAD (always uses request KID and PIV)
+        const aad = createAAD(
+            isReq ? requestKid : Buffer.alloc(0),
+            isReq ? requestPiv : Buffer.alloc(0),
+        );
+        const encStructure = createEncStructure(aad);
+
+        // Decrypt
+        let plaintext: Buffer;
+        try {
+            plaintext = aesCcmDecrypt(this.ctx.recipientKey, nonce, pkt.payload, encStructure);
+        } catch {
+            throw new OscoreProtocolError(
+                OscoreError.UNEXPECTED_RESULT_FROM_EXT_LIB,
+                'Decryption failed',
+            );
+        }
+
+        // Parse plaintext: [code, E_options..., 0xFF, payload...]
+        if (plaintext.length < 1) {
+            throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'Empty plaintext');
+        }
+
+        const originalCode = plaintext[0];
+        let ptOffset = 1;
+
+        // Parse E-options from plaintext
+        const eOptions: CoapOption[] = [];
+        let innerPayload = Buffer.alloc(0);
+        let prevOptNum = 0;
+
+        while (ptOffset < plaintext.length) {
+            const byte = plaintext[ptOffset];
+            if (byte === PAYLOAD_MARKER) {
+                ptOffset++;
+                innerPayload = Buffer.from(plaintext.subarray(ptOffset));
+                break;
+            }
+
+            let delta = (byte >> 4) & 0x0F;
+            let length = byte & 0x0F;
+            ptOffset++;
+
+            if (delta === 13) {
+                delta = plaintext[ptOffset] + 13;
+                ptOffset++;
+            } else if (delta === 14) {
+                delta = (plaintext[ptOffset] << 8 | plaintext[ptOffset + 1]) + 269;
+                ptOffset += 2;
+            }
+
+            if (length === 13) {
+                length = plaintext[ptOffset] + 13;
+                ptOffset++;
+            } else if (length === 14) {
+                length = (plaintext[ptOffset] << 8 | plaintext[ptOffset + 1]) + 269;
+                ptOffset += 2;
+            }
+
+            const optNum = prevOptNum + delta;
+            eOptions.push({
+                number: optNum,
+                value: Buffer.from(plaintext.subarray(ptOffset, ptOffset + length)),
+            });
+            prevOptNum = optNum;
+            ptOffset += length;
+        }
+
+        // Get U-options from outer packet (excluding OSCORE option)
+        const uOptions = pkt.options.filter(o => o.number !== OPTION_OSCORE);
+
+        // Merge U and E options
+        const allOptions = mergeOptions(uOptions, eOptions);
+
+        // Reconstruct original CoAP packet
+        const outPkt = {
+            version: pkt.version,
+            type: pkt.type,
+            tokenLength: pkt.token.length,
+            code: originalCode,
+            messageId: pkt.messageId,
+            token: pkt.token,
+            options: allOptions,
+            payload: innerPayload,
+        };
+
+        const result = serialize(outPkt);
+
+        // Update replay window after successful decryption
+        if (isReq) {
+            this.ctx.replayWindow.update(ssn);
+        }
+
+        this.emit('ssn', this.ctx.ssn);
+
+        return result;
+    };
+
+    on(eventName: 'ssn', listener: (ssn: bigint) => void): this;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    on(eventName: string | symbol, listener: (...args: any[]) => void): this {
+        return super.on(eventName, listener);
+    }
+}
+
+function buildOscoreOptionValue(
+    isReq: boolean,
+    piv: Buffer,
     senderId: Buffer,
-    
-    /**
-     * The identifier of the recipient.
-     * Used for key derivation and message verification.
-     */
-    recipientId: Buffer,
-    
-    /**
-     * The ID context, which provides additional context separation.
-     * Optional in the OSCORE protocol but required in this implementation.
-     *
-     * Use an empty Buffer (Buffer.alloc(0)) if ID context is not needed.
-     */
-    idContext: Buffer,
-    
-    /**
-     * Indicates whether this context is fresh or restored from persistent storage.
-     * - Fresh (0): New cryptographic material, newly established context
-     * - Restored (1): Context loaded from persistent storage with existing SSN state
-     * 
-     * Defaults to Fresh (0) if not specified.
-     */
-    status?: OscoreContextStatus,
-    
-    /**
-     * The current Sender Sequence Number (SSN).
-     * Used to ensure unique nonces for each message.
-     * 
-     * Defaults to 0 if not specified.
-     * MUST be persisted and restored for Restored contexts.
-     */
-    ssn?: bigint,
+    idContext: Buffer | null,
+): Buffer {
+    if (!isReq) {
+        // Response: flag byte with PIV only (no KID, no KID context)
+        if (piv.length > 0 && !(piv.length === 1 && piv[0] === 0)) {
+            const flags = piv.length & FLAG_PIV_MASK;
+            return Buffer.concat([Buffer.from([flags]), piv]);
+        }
+        return Buffer.alloc(0);
+    }
+
+    // Request: flags + PIV + optional KID context + KID
+    let flags = piv.length & FLAG_PIV_MASK;
+    flags |= FLAG_KID;
+
+    const parts: Buffer[] = [];
+
+    if (idContext && idContext.length > 0) {
+        flags |= FLAG_KID_CTX;
+    }
+
+    parts.push(Buffer.from([flags]));
+
+    // PIV
+    parts.push(piv);
+
+    // KID context length + KID context
+    if (idContext && idContext.length > 0) {
+        parts.push(Buffer.from([idContext.length]));
+        parts.push(idContext);
+    }
+
+    // KID (sender ID)
+    parts.push(senderId);
+
+    return Buffer.concat(parts);
 }
 
-/**
- * OSCORE is a security protocol for CoAP that provides message authentication and confidentiality.
- * This class provides a TypeScript interface for the OSCORE protocol.
- */
-export declare class OSCORE extends EventEmitter {
-    /**
-     * Creates a new OSCORE instance with the provided security context.
-     * 
-     * @param params - The OSCORE security context parameters
-     * @throws If the provided parameters are invalid
-     */
-    constructor(params: OscoreContext);
-    
-    /**
-     * Encodes a CoAP message using OSCORE protection.
-     * 
-     * @param coapMessage - The raw CoAP message buffer to be protected
-     * @returns A Promise resolving to the OSCORE-protected message buffer
-     * @throws If encoding fails or if SSN exhaustion occurs
-     */
-    encode: (coapMessage: Buffer) => Promise<Buffer> | never;
-    
-    /**
-     * Decodes an OSCORE-protected message into its original CoAP form.
-     * 
-     * @param oscoreMessage - The OSCORE-protected message buffer to be decoded
-     * @returns A Promise resolving to the original CoAP message buffer
-     * @throws If authentication or decryption fails, or if replay protection detects a replayed message
-     */
-    decode: (oscoreMessage: Buffer) => Promise<Buffer> | never;
-    
-    /**
-     * Registers a listener for the 'ssn' event, which fires when the Sender Sequence Number changes.
-     * This is particularly useful for persisting the SSN value to maintain security across application restarts.
-     * 
-     * @param eventName - The name of the event ('ssn')
-     * @param listener - Callback function that receives the updated SSN value
-     * @returns The OSCORE instance for chaining
-     */
-    on: (eventName: 'ssn', listener: (ssn: bigint) => void) => this;
-}
+function parseOscoreOptionValue(value: Buffer): {
+    piv: Buffer | null;
+    kid: Buffer | null;
+    kidContext: Buffer | null;
+} {
+    if (value.length === 0) {
+        return { piv: null, kid: null, kidContext: null };
+    }
 
-export * from './bindings';
+    let offset = 0;
+    const flags = value[offset++];
+
+    const pivLen = flags & FLAG_PIV_MASK;
+    const hasKid = (flags & FLAG_KID) !== 0;
+    const hasKidCtx = (flags & FLAG_KID_CTX) !== 0;
+
+    let piv: Buffer | null = null;
+    if (pivLen > 0) {
+        piv = Buffer.from(value.subarray(offset, offset + pivLen));
+        offset += pivLen;
+    }
+
+    let kidContext: Buffer | null = null;
+    if (hasKidCtx) {
+        const kidCtxLen = value[offset++];
+        kidContext = Buffer.from(value.subarray(offset, offset + kidCtxLen));
+        offset += kidCtxLen;
+    }
+
+    let kid: Buffer | null = null;
+    if (hasKid) {
+        kid = Buffer.from(value.subarray(offset));
+    }
+
+    return { piv, kid, kidContext };
+}

@@ -1,2 +1,2 @@
-export * from "./error";
-export * from "./oscore";
+export { OscoreError, OscoreProtocolError } from './error';
+export { OSCORE, OscoreContext, OscoreContextStatus } from './oscore';
