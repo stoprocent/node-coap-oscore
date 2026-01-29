@@ -13,6 +13,8 @@ export interface SecurityContext {
     idContext: Buffer | null;
     ssn: bigint;
     replayWindow: ReplayWindow;
+    requestKid: Buffer | null;
+    requestPiv: Buffer | null;
 }
 
 export function initSecurityContext(
@@ -45,6 +47,8 @@ export function initSecurityContext(
         idContext: ctx,
         ssn,
         replayWindow,
+        requestKid: null,
+        requestPiv: null,
     };
 }
 

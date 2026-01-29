@@ -87,13 +87,19 @@ export class OSCORE extends EventEmitter {
         const currentSsn = this.ctx.ssn;
         this.ctx.ssn++;
 
+        // Store request KID/PIV for use in response encode/decode
+        if (isReq) {
+            this.ctx.requestKid = this.ctx.senderId;
+            this.ctx.requestPiv = piv;
+        }
+
         // Create nonce
         const nonce = createNonce(this.ctx.senderId, piv, this.ctx.commonIv);
 
-        // Create AAD
+        // Create AAD — always uses original request's KID and PIV (RFC 8613 §5.4)
         const aad = createAAD(
-            isReq ? this.ctx.senderId : Buffer.alloc(0),
-            isReq ? piv : Buffer.alloc(0),
+            isReq ? this.ctx.senderId : this.ctx.requestKid!,
+            isReq ? piv : this.ctx.requestPiv!,
         );
         const encStructure = createEncStructure(aad);
 
@@ -176,14 +182,16 @@ export class OSCORE extends EventEmitter {
             }
         }
 
-        // Determine which ID to use for nonce: sender's ID from the message
-        const nonceId = isReq ? requestKid : this.ctx.senderId;
+        // Determine which ID to use for nonce:
+        // Request: sender's KID from the message
+        // Response: responder's Sender ID = our recipientId (RFC 8613 §5.2)
+        const nonceId = isReq ? requestKid : this.ctx.recipientId;
         const nonce = createNonce(nonceId, requestPiv, this.ctx.commonIv);
 
-        // Create AAD (always uses request KID and PIV)
+        // Create AAD — always uses original request's KID and PIV (RFC 8613 §5.4)
         const aad = createAAD(
-            isReq ? requestKid : Buffer.alloc(0),
-            isReq ? requestPiv : Buffer.alloc(0),
+            isReq ? requestKid : this.ctx.requestKid!,
+            isReq ? requestPiv : this.ctx.requestPiv!,
         );
         const encStructure = createEncStructure(aad);
 
@@ -268,9 +276,11 @@ export class OSCORE extends EventEmitter {
 
         const result = serialize(outPkt);
 
-        // Update replay window after successful decryption
+        // Update replay window and store request context after successful decryption
         if (isReq) {
             this.ctx.replayWindow.update(ssn);
+            this.ctx.requestKid = requestKid;
+            this.ctx.requestPiv = requestPiv;
         }
 
         this.emit('ssn', this.ctx.ssn);
