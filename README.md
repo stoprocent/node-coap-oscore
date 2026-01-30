@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/coap-oscore.svg)](https://www.npmjs.com/package/coap-oscore)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A high-performance TypeScript implementation of Object Security for Constrained RESTful Environments (OSCORE) for Node.js. This native addon is built on the robust [`uoscore-uedhoc`](https://github.com/eriptic/uoscore-uedhoc) C library, providing standards-compliant implementation of [RFC 8613](https://datatracker.ietf.org/doc/rfc8613/).
+A high-performance TypeScript implementation of Object Security for Constrained RESTful Environments (OSCORE) for Node.js providing standards-compliant implementation of [RFC 8613](https://datatracker.ietf.org/doc/rfc8613/).
 
 ## Features
 
@@ -174,11 +174,6 @@ For complete API documentation, see our [TypeScript API Docs](#).
 - Protect master secrets appropriately for your environment
 - Use cryptographically secure methods to generate key material
 - Monitor the 'ssn' event to track sequence number exhaustion
-
-## Related Projects
-
-- [`eriptic/uoscore-uedhoc`](https://github.com/eriptic/uoscore-uedhoc) - Original C implementation of OSCORE and EDHOC
-- [`stoprocent/uoscore-uedhoc`](https://github.com/stoprocent/uoscore-uedhoc) - Modified fork used by this implementation
 
 ## Contributing
 

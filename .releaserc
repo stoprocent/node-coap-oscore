@@ -1,25 +1,12 @@
 {
-    "branches": [
-      "main",
-      "next"
-    ],
-    "plugins": [
-      "@semantic-release/commit-analyzer",
-      "@semantic-release/release-notes-generator",
-      "@semantic-release/npm",
-      ["@semantic-release/exec", {
-        "publishCmd": "tar czfv prebuilds-${nextRelease.version}.tar.gz prebuilds"
-      }],
-      [
-        "@semantic-release/github",
-        {
-          "assets": [
-            {
-              "path": "prebuilds-*.tar.gz",
-              "label": "Binary modules"
-            }
-          ]
-        }
-      ]
-    ]
-  }
+  "branches": [
+    "main",
+    "next"
+  ],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/npm",
+    "@semantic-release/github"
+  ]
+}
