@@ -71,3 +71,13 @@ export function aesCcmDecrypt(key: Buffer, nonce: Buffer, ciphertextWithTag: Buf
     decipher.final(); // throws on auth failure
     return Buffer.from(decrypted);
 }
+
+export interface AeadProvider {
+    encrypt(key: Buffer, nonce: Buffer, plaintext: Buffer, aad: Buffer): Buffer;
+    decrypt(key: Buffer, nonce: Buffer, ciphertextWithTag: Buffer, aad: Buffer): Buffer;
+}
+
+export const defaultAeadProvider: AeadProvider = {
+    encrypt: aesCcmEncrypt,
+    decrypt: aesCcmDecrypt,
+};

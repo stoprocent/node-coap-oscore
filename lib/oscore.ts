@@ -9,7 +9,7 @@ import {
     splitOptions, mergeOptions, serializeOptionsOnly,
     CoapOption,
 } from './coap';
-import { createAAD, createEncStructure, aesCcmEncrypt, aesCcmDecrypt } from './crypto';
+import { createAAD, createEncStructure, defaultAeadProvider, AeadProvider } from './crypto';
 import {
     SecurityContext, initSecurityContext,
     ssnToPiv, pivToSsn, createNonce, checkSsnOverflow,
@@ -29,13 +29,17 @@ export interface OscoreContext {
     idContext: Buffer;
     status?: OscoreContextStatus;
     ssn?: bigint;
+    aead?: AeadProvider;
 }
 
 export class OSCORE extends EventEmitter {
     private ctx: SecurityContext;
+    private aead: AeadProvider;
 
     constructor(params: OscoreContext) {
         super();
+
+        this.aead = params.aead ?? defaultAeadProvider;
 
         const status = params.status ?? OscoreContextStatus.Fresh;
         const ssn = params.ssn ?? 0n;
@@ -104,7 +108,7 @@ export class OSCORE extends EventEmitter {
         const encStructure = createEncStructure(aad);
 
         // Encrypt
-        const ciphertext = aesCcmEncrypt(this.ctx.senderKey, nonce, plaintext, encStructure);
+        const ciphertext = this.aead.encrypt(this.ctx.senderKey, nonce, plaintext, encStructure);
 
         // Build OSCORE option value
         const oscoreOptionValue = buildOscoreOptionValue(
@@ -198,7 +202,7 @@ export class OSCORE extends EventEmitter {
         // Decrypt
         let plaintext: Buffer;
         try {
-            plaintext = aesCcmDecrypt(this.ctx.recipientKey, nonce, pkt.payload, encStructure);
+            plaintext = this.aead.decrypt(this.ctx.recipientKey, nonce, pkt.payload, encStructure);
         } catch {
             throw new OscoreProtocolError(
                 OscoreError.UNEXPECTED_RESULT_FROM_EXT_LIB,
