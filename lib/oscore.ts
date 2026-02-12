@@ -1,6 +1,6 @@
 import EventEmitter from 'node:events';
 import {
-    CODE_POST, CODE_CHANGED, OPTION_OSCORE,
+    CODE_POST, CODE_CHANGED, OPTION_OSCORE, OPTION_OBSERVE,
     FLAG_KID, FLAG_KID_CTX, FLAG_PIV_MASK,
     PAYLOAD_MARKER,
 } from './constants';
@@ -86,19 +86,31 @@ export class OSCORE extends EventEmitter {
         }
         const plaintext = Buffer.concat(plaintextParts);
 
-        // Generate PIV and increment SSN
-        const piv = ssnToPiv(this.ctx.ssn);
-        const currentSsn = this.ctx.ssn;
-        this.ctx.ssn++;
+        // Determine if this response is a notification (has Observe in E-options)
+        const isNotification = !isReq && eOptions.some(o => o.number === OPTION_OBSERVE);
 
-        // Store request KID/PIV for use in response encode/decode
-        if (isReq) {
-            this.ctx.requestKid = this.ctx.senderId;
-            this.ctx.requestPiv = piv;
+        let piv: Buffer;
+        let nonce: Buffer;
+        let currentSsn: bigint | null;
+
+        if (isReq || isNotification) {
+            // Request or notification: generate fresh PIV, increment SSN
+            piv = ssnToPiv(this.ctx.ssn);
+            currentSsn = this.ctx.ssn;
+            this.ctx.ssn++;
+
+            if (isReq) {
+                this.ctx.requestKid = this.ctx.senderId;
+                this.ctx.requestPiv = piv;
+            }
+
+            nonce = createNonce(this.ctx.senderId, piv, this.ctx.commonIv);
+        } else {
+            // Normal response: reuse stored request nonce, omit PIV from OSCORE option
+            piv = Buffer.alloc(0);
+            currentSsn = null;
+            nonce = createNonce(this.ctx.requestKid!, this.ctx.requestPiv!, this.ctx.commonIv);
         }
-
-        // Create nonce
-        const nonce = createNonce(this.ctx.senderId, piv, this.ctx.commonIv);
 
         // Create AAD — always uses original request's KID and PIV (RFC 8613 §5.4)
         const aad = createAAD(
@@ -137,7 +149,9 @@ export class OSCORE extends EventEmitter {
         };
 
         const result = serialize(outPkt);
-        this.emit('ssn', currentSsn);
+        if (currentSsn !== null) {
+            this.emit('ssn', currentSsn);
+        }
 
         return result;
     };
@@ -156,7 +170,7 @@ export class OSCORE extends EventEmitter {
         }
 
         // Parse OSCORE option value
-        const { piv, kid } = parseOscoreOptionValue(oscoreOpt.value);
+        const { piv, kid, kidContext } = parseOscoreOptionValue(oscoreOpt.value);
 
         // Determine if this is a request (has KID in OSCORE option) or response
         const isReq = kid !== null;
@@ -171,14 +185,32 @@ export class OSCORE extends EventEmitter {
             }
         }
 
-        // For requests, PIV must be present
-        const requestPiv = piv ?? Buffer.from([0]);
-        const requestKid = kid ?? Buffer.alloc(0);
-        const ssn = pivToSsn(requestPiv);
+        // Finding 1: Requests MUST include PIV (RFC 8613 §5.4)
+        if (isReq && piv === null) {
+            throw new OscoreProtocolError(
+                OscoreError.OSCORE_INPKT_INVALID_PIV,
+                'Request missing Partial IV',
+            );
+        }
+
+        // Validate KID Context for requests
+        if (isReq) {
+            const localKidContext = this.ctx.idContext;
+            if (
+                (kidContext === null) !== (localKidContext === null) ||
+                (kidContext !== null && localKidContext !== null && !kidContext.equals(localKidContext))
+            ) {
+                throw new OscoreProtocolError(
+                    OscoreError.OSCORE_KID_RECIPIENT_ID_MISMATCH,
+                    'KID Context does not match',
+                );
+            }
+        }
 
         // Replay protection (only for requests)
         if (isReq) {
-            if (!this.ctx.replayWindow.isValid(ssn)) {
+            const reqSsn = pivToSsn(piv!);
+            if (!this.ctx.replayWindow.isValid(reqSsn)) {
                 throw new OscoreProtocolError(
                     OscoreError.OSCORE_REPLAY_WINDOW_PROTECTION_ERROR,
                     'Replay window protection error',
@@ -186,16 +218,23 @@ export class OSCORE extends EventEmitter {
             }
         }
 
-        // Determine which ID to use for nonce:
-        // Request: sender's KID from the message
-        // Response: responder's Sender ID = our recipientId (RFC 8613 §5.2)
-        const nonceId = isReq ? requestKid : this.ctx.recipientId;
-        const nonce = createNonce(nonceId, requestPiv, this.ctx.commonIv);
+        // Finding 3: Nonce computation per RFC 8613 §5.3
+        let nonce: Buffer;
+        if (isReq) {
+            // Request: sender's KID + PIV from the message
+            nonce = createNonce(kid!, piv!, this.ctx.commonIv);
+        } else if (piv !== null) {
+            // Response with PIV (notification): responder's sender ID + response PIV
+            nonce = createNonce(this.ctx.recipientId, piv, this.ctx.commonIv);
+        } else {
+            // Response without PIV: reuse stored request nonce
+            nonce = createNonce(this.ctx.requestKid!, this.ctx.requestPiv!, this.ctx.commonIv);
+        }
 
         // Create AAD — always uses original request's KID and PIV (RFC 8613 §5.4)
         const aad = createAAD(
-            isReq ? requestKid : this.ctx.requestKid!,
-            isReq ? requestPiv : this.ctx.requestPiv!,
+            isReq ? kid! : this.ctx.requestKid!,
+            isReq ? piv! : this.ctx.requestPiv!,
         );
         const encStructure = createEncStructure(aad);
 
@@ -282,9 +321,26 @@ export class OSCORE extends EventEmitter {
 
         // Update replay window and store request context after successful decryption
         if (isReq) {
-            this.ctx.replayWindow.update(ssn);
-            this.ctx.requestKid = requestKid;
-            this.ctx.requestPiv = requestPiv;
+            this.ctx.replayWindow.update(pivToSsn(piv!));
+            this.ctx.requestKid = kid!;
+            this.ctx.requestPiv = piv!;
+        }
+
+        // Finding 2: Notification replay protection
+        if (!isReq && piv !== null) {
+            const hasObserve = eOptions.some(o => o.number === OPTION_OBSERVE);
+            if (hasObserve) {
+                const tokenHex = pkt.token.toString('hex');
+                const notifSsn = pivToSsn(piv);
+                const storedSsn = this.ctx.notificationReplay.get(tokenHex);
+                if (storedSsn !== undefined && notifSsn <= storedSsn) {
+                    throw new OscoreProtocolError(
+                        OscoreError.OSCORE_REPLAY_NOTIFICATION_PROTECTION_ERROR,
+                        'Notification replay detected',
+                    );
+                }
+                this.ctx.notificationReplay.set(tokenHex, notifSsn);
+            }
         }
 
         this.emit('ssn', this.ctx.ssn);
@@ -307,7 +363,9 @@ function buildOscoreOptionValue(
 ): Buffer {
     if (!isReq) {
         // Response: flag byte with PIV only (no KID, no KID context)
-        if (piv.length > 0 && !(piv.length === 1 && piv[0] === 0)) {
+        // Normal responses use piv=Buffer.alloc(0) → empty OSCORE option
+        // Notifications use fresh PIV → included in OSCORE option
+        if (piv.length > 0) {
             const flags = piv.length & FLAG_PIV_MASK;
             return Buffer.concat([Buffer.from([flags]), piv]);
         }
@@ -359,13 +417,22 @@ function parseOscoreOptionValue(value: Buffer): {
 
     let piv: Buffer | null = null;
     if (pivLen > 0) {
+        if (offset + pivLen > value.length) {
+            throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'PIV overrun');
+        }
         piv = Buffer.from(value.subarray(offset, offset + pivLen));
         offset += pivLen;
     }
 
     let kidContext: Buffer | null = null;
     if (hasKidCtx) {
+        if (offset >= value.length) {
+            throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'missing KID Context length');
+        }
         const kidCtxLen = value[offset++];
+        if (offset + kidCtxLen > value.length) {
+            throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'KID Context overrun');
+        }
         kidContext = Buffer.from(value.subarray(offset, offset + kidCtxLen));
         offset += kidCtxLen;
     }

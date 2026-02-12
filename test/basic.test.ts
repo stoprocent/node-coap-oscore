@@ -1,5 +1,6 @@
 import { expect, describe, it, beforeEach, jest } from '@jest/globals';
 import { OSCORE, OscoreContextStatus, OscoreContext } from '../dist/index';
+import { createNonce } from '../dist/context';
 import { generate as generateCoap, parse as parseCoap } from 'coap-packet';
 
 describe('OSCORE', () => {
@@ -377,7 +378,7 @@ describe('OSCORE', () => {
 
     it('should properly handle interleaved ACK and encrypted messages', async () => {
       // Real-world scenario: ACK messages interleaved with normal encrypted traffic
-      
+
       // 1. Send encrypted message 1
       const message1 = Buffer.from('44015d1f00003974396c6f63616c686f737483747631', 'hex');
       const encrypted1 = await oscoreClient.encode(message1);
@@ -401,9 +402,275 @@ describe('OSCORE', () => {
       // 4. Verify both encrypted messages can be decoded correctly
       const decrypted1 = await oscoreServer.decode(encrypted1);
       expect(decrypted1).toEqual(message1);
-      
+
       const decrypted2 = await oscoreServer.decode(encrypted2);
       expect(decrypted2).toEqual(message2);
     });
   });
+
+  describe('Request PIV validation (Finding 1)', () => {
+    it('should reject a request with KID but no PIV', async () => {
+      const serverNoCtx = new OSCORE({
+        ...serverContext,
+        idContext: Buffer.alloc(0),
+      });
+
+      // Build a raw CoAP+OSCORE packet with KID flag set but no PIV
+      // OSCORE option value: flags=0x08 (KID present, PIV len=0), KID=0x01
+      const oscoreValue = Buffer.from([0x08, 0x01]);
+      const raw = buildRawOscorePacket(oscoreValue);
+
+      await expect(serverNoCtx.decode(raw)).rejects.toThrow('Request missing Partial IV');
+    });
+  });
+
+  describe('OSCORE option parser validation (Finding 6)', () => {
+    it('should reject truncated PIV', async () => {
+      // flags=0x0B (KID + PIV len=3), but only 1 byte of PIV data
+      const oscoreValue = Buffer.from([0x0B, 0xAA]);
+      const raw = buildRawOscorePacket(oscoreValue);
+
+      await expect(oscoreServer.decode(raw)).rejects.toThrow('PIV overrun');
+    });
+
+    it('should reject truncated KID Context', async () => {
+      // flags=0x19 (KID + KID_CTX + PIV len=1), PIV=0x00, kidCtxLen=5, but only 2 bytes of context
+      const oscoreValue = Buffer.from([0x19, 0x00, 0x05, 0xAA, 0xBB]);
+      const raw = buildRawOscorePacket(oscoreValue);
+
+      await expect(oscoreServer.decode(raw)).rejects.toThrow('KID Context overrun');
+    });
+
+    it('should reject missing KID Context length byte', async () => {
+      // flags=0x18 (KID + KID_CTX + PIV len=0), no more data
+      const oscoreValue = Buffer.from([0x18]);
+      const raw = buildRawOscorePacket(oscoreValue);
+
+      await expect(oscoreServer.decode(raw)).rejects.toThrow('missing KID Context length');
+    });
+  });
+
+  describe('Nonce input validation (Finding 5)', () => {
+    const dummyIv = Buffer.alloc(13);
+
+    it('should reject sender ID longer than 7 bytes', () => {
+      const longId = Buffer.alloc(8, 0x01);
+      expect(() => createNonce(longId, Buffer.from([0x00]), dummyIv))
+        .toThrow('Sender ID too long');
+    });
+
+    it('should reject PIV longer than 5 bytes', () => {
+      const longPiv = Buffer.alloc(6, 0x01);
+      expect(() => createNonce(Buffer.from([0x01]), longPiv, dummyIv))
+        .toThrow('PIV too long');
+    });
+  });
+
+  describe('Response nonce handling (Finding 3)', () => {
+    it('should round-trip a normal response (no Observe)', async () => {
+      // Use SSN>0 to ensure fresh nonce differs from SSN=0
+      const client = new OSCORE({ ...clientContext, ssn: 5n });
+      const server = new OSCORE({ ...serverContext });
+
+      // Client sends request
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x1000,
+        token: Buffer.from([0x42]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('temp') }],
+        payload: Buffer.from('hello'),
+      });
+      const encReq = await client.encode(request);
+
+      // Server decodes request
+      const decReq = await server.decode(encReq);
+      expect(decReq).toEqual(request);
+
+      // Server sends normal response (no Observe option)
+      const response = generateCoap({
+        ack: true,
+        code: '2.05',
+        messageId: 0x1000,
+        token: Buffer.from([0x42]),
+        payload: Buffer.from('25.3C'),
+      });
+      const encResp = await server.encode(response);
+
+      // Client decodes response
+      const decResp = await client.decode(encResp);
+      expect(decResp).toEqual(response);
+    });
+
+    it('should round-trip a notification response (with Observe)', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 1n });
+      const server = new OSCORE({ ...serverContext });
+
+      // Client sends observe request
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x2000,
+        token: Buffer.from([0x77]),
+        options: [
+          { name: 'Observe', value: Buffer.alloc(0) },
+          { name: 'Uri-Path', value: Buffer.from('temp') },
+        ],
+        payload: Buffer.alloc(0),
+      });
+      const encReq = await client.encode(request);
+      const decReq = await server.decode(encReq);
+      expect(decReq).toEqual(request);
+
+      // Server sends notification (with Observe in response)
+      const notification = generateCoap({
+        ack: true,
+        code: '2.05',
+        messageId: 0x2000,
+        token: Buffer.from([0x77]),
+        options: [
+          { name: 'Observe', value: Buffer.from([0x01]) },
+        ],
+        payload: Buffer.from('25.3C'),
+      });
+      const encNotif = await server.encode(notification);
+      const decNotif = await client.decode(encNotif);
+      expect(decNotif).toEqual(notification);
+    });
+  });
+
+  describe('Notification replay protection (Finding 2)', () => {
+    it('should accept two notifications with increasing PIV', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 1n });
+      const server = new OSCORE({ ...serverContext });
+
+      // Client sends observe request
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x3000,
+        token: Buffer.from([0x88]),
+        options: [
+          { name: 'Observe', value: Buffer.alloc(0) },
+          { name: 'Uri-Path', value: Buffer.from('temp') },
+        ],
+      });
+      const encReq = await client.encode(request);
+      await server.decode(encReq);
+
+      // Server sends first notification (SSN=0)
+      const notif1 = generateCoap({
+        ack: true, code: '2.05', messageId: 0x3000,
+        token: Buffer.from([0x88]),
+        options: [{ name: 'Observe', value: Buffer.from([0x01]) }],
+        payload: Buffer.from('notif1'),
+      });
+      const encNotif1 = await server.encode(notif1);
+      await expect(client.decode(encNotif1)).resolves.toBeDefined();
+
+      // Server sends second notification (SSN=1)
+      const notif2 = generateCoap({
+        ack: true, code: '2.05', messageId: 0x3001,
+        token: Buffer.from([0x88]),
+        options: [{ name: 'Observe', value: Buffer.from([0x02]) }],
+        payload: Buffer.from('notif2'),
+      });
+      const encNotif2 = await server.encode(notif2);
+      await expect(client.decode(encNotif2)).resolves.toBeDefined();
+    });
+
+    it('should reject replayed notification', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 1n });
+      const server = new OSCORE({ ...serverContext });
+
+      // Client sends observe request
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x4000,
+        token: Buffer.from([0x99]),
+        options: [
+          { name: 'Observe', value: Buffer.alloc(0) },
+          { name: 'Uri-Path', value: Buffer.from('temp') },
+        ],
+      });
+      const encReq = await client.encode(request);
+      await server.decode(encReq);
+
+      // Server sends notification
+      const notif = generateCoap({
+        ack: true, code: '2.05', messageId: 0x4000,
+        token: Buffer.from([0x99]),
+        options: [{ name: 'Observe', value: Buffer.from([0x01]) }],
+        payload: Buffer.from('notif'),
+      });
+      const encNotif = await server.encode(notif);
+
+      // First decode succeeds
+      await expect(client.decode(encNotif)).resolves.toBeDefined();
+
+      // Replay same notification → rejected
+      await expect(client.decode(encNotif)).rejects.toThrow('Notification replay detected');
+    });
+  });
+
+  describe('SSN overflow (Finding 7)', () => {
+    it('should accept encode when SSN is at 2^40-1', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 0xFFFFFFFFFFn });
+      const message = Buffer.from('44015d1f00003974396c6f63616c686f737483747631', 'hex');
+      await expect(client.encode(message)).resolves.toBeDefined();
+    });
+
+    it('should reject encode when SSN is above 2^40-1', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 0x10000000000n });
+      const message = Buffer.from('44015d1f00003974396c6f63616c686f737483747631', 'hex');
+      await expect(client.encode(message)).rejects.toThrow('SSN overflow');
+    });
+  });
+
+  describe('kidContext validation (Finding 4)', () => {
+    it('should reject request with mismatched kidContext', async () => {
+      // Client uses idContext = 0x1122334455
+      const client = new OSCORE({ ...clientContext });
+      // Server uses a different idContext
+      const server = new OSCORE({
+        ...serverContext,
+        idContext: Buffer.from('AABBCCDDEE', 'hex'),
+      });
+
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x5000,
+        token: Buffer.from([0xAA]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+      const encReq = await client.encode(request);
+
+      await expect(server.decode(encReq)).rejects.toThrow('KID Context does not match');
+    });
+  });
 });
+
+/**
+ * Build a minimal raw CoAP packet containing an OSCORE option with the given value.
+ * Type=CON, Code=0.02 (POST), MsgID=0x0001, Token=0xAB
+ */
+function buildRawOscorePacket(oscoreValue: Buffer, token?: Buffer): Buffer {
+  const tok = token ?? Buffer.from([0xAB]);
+  // Header: Ver=1, Type=CON(0), TKL=tok.length, Code=0.02, MsgID=0x0001
+  const header = Buffer.from([
+    0x40 | tok.length, // ver=1, type=0(CON), tkl
+    0x02,              // code 0.02 POST
+    0x00, 0x01,        // message ID
+  ]);
+
+  // OSCORE option (number 9, delta=9)
+  let optHeader: Buffer;
+  if (oscoreValue.length < 13) {
+    optHeader = Buffer.from([(9 << 4) | oscoreValue.length]);
+  } else {
+    optHeader = Buffer.from([(9 << 4) | 13, oscoreValue.length - 13]);
+  }
+
+  // Payload marker + dummy ciphertext (needed for valid OSCORE packet)
+  const payloadMarker = Buffer.from([0xFF]);
+  const dummyPayload = Buffer.alloc(16, 0xCC);
+
+  return Buffer.concat([header, tok, optHeader, oscoreValue, payloadMarker, dummyPayload]);
+}

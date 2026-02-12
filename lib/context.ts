@@ -1,4 +1,4 @@
-import { KEY_LEN, NONCE_LEN, MAX_SSN } from './constants';
+import { KEY_LEN, NONCE_LEN, MAX_SSN, MAX_PIV_LEN, MAX_SENDER_ID_LEN } from './constants';
 import { deriveKeyOrIV } from './crypto';
 import { ReplayWindow } from './replay-window';
 import { OscoreError } from './error';
@@ -15,6 +15,7 @@ export interface SecurityContext {
     replayWindow: ReplayWindow;
     requestKid: Buffer | null;
     requestPiv: Buffer | null;
+    notificationReplay: Map<string, bigint>;
 }
 
 export function initSecurityContext(
@@ -49,6 +50,7 @@ export function initSecurityContext(
         replayWindow,
         requestKid: null,
         requestPiv: null,
+        notificationReplay: new Map(),
     };
 }
 
@@ -77,6 +79,12 @@ export function pivToSsn(piv: Buffer): bigint {
 export function createNonce(idPiv: Buffer, piv: Buffer, commonIv: Buffer): Buffer {
     // Nonce construction per RFC 8613 Section 5.2:
     // nonce = pad_to_13_bytes(len(id) || id_padded_to_7 || piv_padded_to_5) XOR common_iv
+    if (idPiv.length > MAX_SENDER_ID_LEN) {
+        throw new OscoreProtocolError(OscoreError.OSCORE_INPKT_INVALID_PIV, 'Sender ID too long');
+    }
+    if (piv.length > MAX_PIV_LEN) {
+        throw new OscoreProtocolError(OscoreError.OSCORE_INPKT_INVALID_PIV, 'PIV too long');
+    }
     const nonce = Buffer.alloc(NONCE_LEN);
 
     // First byte: length of idPiv

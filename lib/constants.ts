@@ -40,8 +40,9 @@ export const NONCE_LEN = 13;             // 13-byte nonce
 export const AUTH_TAG_LEN = 8;           // 64-bit authentication tag
 
 // SSN / PIV limits
-export const MAX_SSN = 0x7FFFFF;         // max SSN that fits in 3 bytes (per typical OSCORE)
+export const MAX_SSN = 0xFFFFFFFFFF;     // 2^40 - 1, max SSN that fits in 5-byte PIV (RFC 8613)
 export const MAX_PIV_LEN = 5;            // maximum PIV length in bytes
+export const MAX_SENDER_ID_LEN = 7;      // nonce structure allocates 7 bytes for sender ID
 export const REPLAY_WINDOW_SIZE = 32;    // sliding window size
 
 // OSCORE option flag masks (first byte of OSCORE option value)
