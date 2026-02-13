@@ -11,7 +11,7 @@ import {
 } from './coap';
 import { createAAD, createEncStructure, defaultAeadProvider, AeadProvider } from './crypto';
 import {
-    SecurityContext, initSecurityContext,
+    SecurityContext, InteractionState, initSecurityContext,
     ssnToPiv, pivToSsn, createNonce, checkSsnOverflow,
 } from './context';
 import { OscoreError, OscoreProtocolError } from './error';
@@ -56,6 +56,58 @@ export class OSCORE extends EventEmitter {
         );
     }
 
+    private getInteractionOrThrow(token: Buffer): InteractionState {
+        const tokenHex = token.toString('hex');
+        const interaction = this.ctx.interactions.get(tokenHex);
+        if (!interaction) {
+            throw new OscoreProtocolError(
+                OscoreError.OSCORE_INTERACTION_NOT_FOUND,
+                'Interaction not found for token',
+            );
+        }
+        return interaction;
+    }
+
+    private upsertRequestInteraction(
+        token: Buffer,
+        requestKid: Buffer,
+        requestPiv: Buffer,
+        observeAction: 'none' | 'register' | 'cancel',
+    ): void {
+        const tokenHex = token.toString('hex');
+        const existing = this.ctx.interactions.get(tokenHex);
+        const interaction: InteractionState = existing ? {
+            ...existing,
+            requestKid: Buffer.from(requestKid),
+            requestPiv: Buffer.from(requestPiv),
+        } : {
+            requestKid: Buffer.from(requestKid),
+            requestPiv: Buffer.from(requestPiv),
+            observeRequestKid: null,
+            observeRequestPiv: null,
+            notificationSsn: null,
+        };
+
+        if (observeAction === 'register') {
+            interaction.observeRequestKid = Buffer.from(requestKid);
+            interaction.observeRequestPiv = Buffer.from(requestPiv);
+            interaction.notificationSsn = null;
+        } else if (observeAction === 'cancel') {
+            interaction.observeRequestKid = null;
+            interaction.observeRequestPiv = null;
+            interaction.notificationSsn = null;
+        }
+
+        this.ctx.interactions.set(tokenHex, interaction);
+    }
+
+    private deleteInteractionIfOneOff(token: Buffer, interaction: InteractionState): void {
+        if (interaction.observeRequestKid !== null || interaction.observeRequestPiv !== null) {
+            return;
+        }
+        this.ctx.interactions.delete(token.toString('hex'));
+    }
+
     encode = async (coapMessage: Buffer): Promise<Buffer> => {
         if (coapMessage.length === 0) {
             throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'Empty input');
@@ -86,12 +138,16 @@ export class OSCORE extends EventEmitter {
         }
         const plaintext = Buffer.concat(plaintextParts);
 
+        const observeAction = isReq ? getObserveRequestAction(eOptions) : 'none';
         // Determine if this response is a notification (has Observe in E-options)
         const isNotification = !isReq && eOptions.some(o => o.number === OPTION_OBSERVE);
 
         let piv: Buffer;
         let nonce: Buffer;
         let currentSsn: bigint | null;
+        let aadKid: Buffer;
+        let aadPiv: Buffer;
+        let interaction: InteractionState | null = null;
 
         if (isReq || isNotification) {
             // Request or notification: generate fresh PIV, increment SSN
@@ -99,24 +155,27 @@ export class OSCORE extends EventEmitter {
             currentSsn = this.ctx.ssn;
             this.ctx.ssn++;
 
-            if (isReq) {
-                this.ctx.requestKid = this.ctx.senderId;
-                this.ctx.requestPiv = piv;
-            }
-
             nonce = createNonce(this.ctx.senderId, piv, this.ctx.commonIv);
+            if (isReq) {
+                aadKid = this.ctx.senderId;
+                aadPiv = piv;
+            } else {
+                interaction = this.getInteractionOrThrow(pkt.token);
+                aadKid = interaction.observeRequestKid ?? interaction.requestKid;
+                aadPiv = interaction.observeRequestPiv ?? interaction.requestPiv;
+            }
         } else {
             // Normal response: reuse stored request nonce, omit PIV from OSCORE option
+            interaction = this.getInteractionOrThrow(pkt.token);
             piv = Buffer.alloc(0);
             currentSsn = null;
-            nonce = createNonce(this.ctx.requestKid!, this.ctx.requestPiv!, this.ctx.commonIv);
+            nonce = createNonce(interaction.requestKid, interaction.requestPiv, this.ctx.commonIv);
+            aadKid = interaction.requestKid;
+            aadPiv = interaction.requestPiv;
         }
 
         // Create AAD — always uses original request's KID and PIV (RFC 8613 §5.4)
-        const aad = createAAD(
-            isReq ? this.ctx.senderId : this.ctx.requestKid!,
-            isReq ? piv : this.ctx.requestPiv!,
-        );
+        const aad = createAAD(aadKid, aadPiv);
         const encStructure = createEncStructure(aad);
 
         // Encrypt
@@ -149,6 +208,15 @@ export class OSCORE extends EventEmitter {
         };
 
         const result = serialize(outPkt);
+
+        if (isReq) {
+            this.upsertRequestInteraction(pkt.token, this.ctx.senderId, piv, observeAction);
+        } else if (interaction) {
+            if (!isNotification) {
+                this.deleteInteractionIfOneOff(pkt.token, interaction);
+            }
+        }
+
         if (currentSsn !== null) {
             this.emit('ssn', currentSsn);
         }
@@ -162,7 +230,6 @@ export class OSCORE extends EventEmitter {
         }
 
         const pkt = deserialize(oscoreMessage);
-
         // Find OSCORE option
         const oscoreOpt = pkt.options.find(o => o.number === OPTION_OSCORE);
         if (!oscoreOpt) {
@@ -218,24 +285,32 @@ export class OSCORE extends EventEmitter {
             }
         }
 
-        // Finding 3: Nonce computation per RFC 8613 §5.3
+        // Nonce computation per RFC 8613 §5.3
+        let interaction: InteractionState | null = null;
+        let aadKid: Buffer;
+        let aadPiv: Buffer;
         let nonce: Buffer;
         if (isReq) {
             // Request: sender's KID + PIV from the message
             nonce = createNonce(kid!, piv!, this.ctx.commonIv);
+            aadKid = kid!;
+            aadPiv = piv!;
         } else if (piv !== null) {
             // Response with PIV (notification): responder's sender ID + response PIV
+            interaction = this.getInteractionOrThrow(pkt.token);
             nonce = createNonce(this.ctx.recipientId, piv, this.ctx.commonIv);
+            aadKid = interaction.observeRequestKid ?? interaction.requestKid;
+            aadPiv = interaction.observeRequestPiv ?? interaction.requestPiv;
         } else {
             // Response without PIV: reuse stored request nonce
-            nonce = createNonce(this.ctx.requestKid!, this.ctx.requestPiv!, this.ctx.commonIv);
+            interaction = this.getInteractionOrThrow(pkt.token);
+            nonce = createNonce(interaction.requestKid, interaction.requestPiv, this.ctx.commonIv);
+            aadKid = interaction.requestKid;
+            aadPiv = interaction.requestPiv;
         }
 
         // Create AAD — always uses original request's KID and PIV (RFC 8613 §5.4)
-        const aad = createAAD(
-            isReq ? kid! : this.ctx.requestKid!,
-            isReq ? piv! : this.ctx.requestPiv!,
-        );
+        const aad = createAAD(aadKid, aadPiv);
         const encStructure = createEncStructure(aad);
 
         // Decrypt
@@ -322,24 +397,29 @@ export class OSCORE extends EventEmitter {
         // Update replay window and store request context after successful decryption
         if (isReq) {
             this.ctx.replayWindow.update(pivToSsn(piv!));
-            this.ctx.requestKid = kid!;
-            this.ctx.requestPiv = piv!;
+            this.upsertRequestInteraction(pkt.token, kid!, piv!, getObserveRequestAction(eOptions));
         }
 
-        // Finding 2: Notification replay protection
+        // Notification replay protection
         if (!isReq && piv !== null) {
             const hasObserve = eOptions.some(o => o.number === OPTION_OBSERVE);
-            if (hasObserve) {
-                const tokenHex = pkt.token.toString('hex');
+            if (hasObserve && interaction) {
                 const notifSsn = pivToSsn(piv);
-                const storedSsn = this.ctx.notificationReplay.get(tokenHex);
-                if (storedSsn !== undefined && notifSsn <= storedSsn) {
+                const storedSsn = interaction.notificationSsn;
+                if (storedSsn !== null && notifSsn <= storedSsn) {
                     throw new OscoreProtocolError(
                         OscoreError.OSCORE_REPLAY_NOTIFICATION_PROTECTION_ERROR,
                         'Notification replay detected',
                     );
                 }
-                this.ctx.notificationReplay.set(tokenHex, notifSsn);
+                interaction.notificationSsn = notifSsn;
+            }
+        }
+
+        if (!isReq && interaction) {
+            const hasObserve = eOptions.some(o => o.number === OPTION_OBSERVE);
+            if (!hasObserve && piv === null) {
+                this.deleteInteractionIfOneOff(pkt.token, interaction);
             }
         }
 
@@ -353,6 +433,23 @@ export class OSCORE extends EventEmitter {
     on(eventName: string | symbol, listener: (...args: any[]) => void): this {
         return super.on(eventName, listener);
     }
+}
+
+function getObserveRequestAction(options: CoapOption[]): 'none' | 'register' | 'cancel' {
+    const observe = options.find(o => o.number === OPTION_OBSERVE);
+    if (!observe) {
+        return 'none';
+    }
+    const observeValue = decodeUintOption(observe.value);
+    return observeValue === 1n ? 'cancel' : 'register';
+}
+
+function decodeUintOption(value: Buffer): bigint {
+    let out = 0n;
+    for (const byte of value) {
+        out = (out << 8n) | BigInt(byte);
+    }
+    return out;
 }
 
 function buildOscoreOptionValue(

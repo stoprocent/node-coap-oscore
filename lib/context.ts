@@ -13,9 +13,15 @@ export interface SecurityContext {
     idContext: Buffer | null;
     ssn: bigint;
     replayWindow: ReplayWindow;
-    requestKid: Buffer | null;
-    requestPiv: Buffer | null;
-    notificationReplay: Map<string, bigint>;
+    interactions: Map<string, InteractionState>;
+}
+
+export interface InteractionState {
+    requestKid: Buffer;
+    requestPiv: Buffer;
+    observeRequestKid: Buffer | null;
+    observeRequestPiv: Buffer | null;
+    notificationSsn: bigint | null;
 }
 
 export function initSecurityContext(
@@ -48,9 +54,7 @@ export function initSecurityContext(
         idContext: ctx,
         ssn,
         replayWindow,
-        requestKid: null,
-        requestPiv: null,
-        notificationReplay: new Map(),
+        interactions: new Map(),
     };
 }
 

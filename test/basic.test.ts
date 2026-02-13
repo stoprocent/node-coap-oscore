@@ -610,6 +610,92 @@ describe('OSCORE', () => {
     });
   });
 
+  describe('Interaction scoping by token', () => {
+    it('should decrypt observe notification after an intervening PUT request', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 1n });
+      const server = new OSCORE({ ...serverContext });
+
+      // 1) Register Observe relation with token A
+      const observeReq = generateCoap({
+        code: '0.01',
+        messageId: 0x6100,
+        token: Buffer.from([0xA1]),
+        options: [
+          { name: 'Observe', value: Buffer.alloc(0) },
+          { name: 'Uri-Path', value: Buffer.from('temp') },
+        ],
+      });
+      await server.decode(await client.encode(observeReq));
+
+      // 2) Send PUT on the same resource with token B
+      const putReq = generateCoap({
+        code: '0.03',
+        messageId: 0x6101,
+        token: Buffer.from([0xB2]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('temp') }],
+        payload: Buffer.from('new-value'),
+      });
+      await server.decode(await client.encode(putReq));
+
+      // 3) Server emits notification for token A
+      const notification = generateCoap({
+        ack: true,
+        code: '2.05',
+        messageId: 0x6102,
+        token: Buffer.from([0xA1]),
+        options: [{ name: 'Observe', value: Buffer.from([0x01]) }],
+        payload: Buffer.from('notify'),
+      });
+
+      const encNotif = await server.encode(notification);
+      const decNotif = await client.decode(encNotif);
+      expect(decNotif).toEqual(notification);
+    });
+
+    it('should decrypt out-of-order responses for parallel request tokens', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 2n });
+      const server = new OSCORE({ ...serverContext });
+
+      const req1 = generateCoap({
+        code: '0.01',
+        messageId: 0x6200,
+        token: Buffer.from([0x11]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('a') }],
+      });
+      const req2 = generateCoap({
+        code: '0.03',
+        messageId: 0x6201,
+        token: Buffer.from([0x22]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('b') }],
+        payload: Buffer.from('v'),
+      });
+
+      await server.decode(await client.encode(req1));
+      await server.decode(await client.encode(req2));
+
+      // Respond to req1 first (after req2 has already updated context state)
+      const resp1 = generateCoap({
+        ack: true,
+        code: '2.05',
+        messageId: 0x6200,
+        token: Buffer.from([0x11]),
+        payload: Buffer.from('r1'),
+      });
+      const resp2 = generateCoap({
+        ack: true,
+        code: '2.04',
+        messageId: 0x6201,
+        token: Buffer.from([0x22]),
+        payload: Buffer.from('r2'),
+      });
+
+      const dec1 = await client.decode(await server.encode(resp1));
+      const dec2 = await client.decode(await server.encode(resp2));
+      expect(dec1).toEqual(resp1);
+      expect(dec2).toEqual(resp2);
+    });
+  });
+
   describe('SSN overflow (Finding 7)', () => {
     it('should accept encode when SSN is at 2^40-1', async () => {
       const client = new OSCORE({ ...clientContext, ssn: 0xFFFFFFFFFFn });
