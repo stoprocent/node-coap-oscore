@@ -731,6 +731,93 @@ describe('OSCORE', () => {
       await expect(server.decode(encReq)).rejects.toThrow('KID Context does not match');
     });
   });
+
+  describe('Reboot recovery (Echo challenge)', () => {
+    it('should throw FIRST_REQUEST_AFTER_REBOOT for Restored context with decrypted buffer', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 10n });
+      const server = new OSCORE({ ...serverContext, status: OscoreContextStatus.Restored, ssn: 5n });
+
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x7000,
+        token: Buffer.from([0xCC]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+      const encReq = await client.encode(request);
+
+      try {
+        await server.decode(encReq);
+        throw new Error('Should have thrown');
+      } catch (err: any) {
+        expect(err.status).toBe(201);
+        expect(err.decrypted).toBeInstanceOf(Buffer);
+        // Decrypted buffer should be a valid CoAP packet matching the original
+        const parsed = parseCoap(err.decrypted);
+        expect(parsed.code).toBe('0.01');
+      }
+    });
+
+    it('should NOT throw for Fresh context', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 10n });
+      const server = new OSCORE({ ...serverContext, status: OscoreContextStatus.Fresh });
+
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x7001,
+        token: Buffer.from([0xCD]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+      const encReq = await client.encode(request);
+
+      await expect(server.decode(encReq)).resolves.toBeDefined();
+    });
+
+    it('should work normally after clearRebootRecovery()', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 10n });
+      const server = new OSCORE({ ...serverContext, status: OscoreContextStatus.Restored, ssn: 5n });
+
+      const request1 = generateCoap({
+        code: '0.01',
+        messageId: 0x7002,
+        token: Buffer.from([0xCE]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+      const encReq1 = await client.encode(request1);
+
+      // First decode throws
+      await expect(server.decode(encReq1)).rejects.toMatchObject({ status: 201 });
+
+      // Clear reboot recovery
+      server.clearRebootRecovery();
+
+      // Second request should work
+      const request2 = generateCoap({
+        code: '0.01',
+        messageId: 0x7003,
+        token: Buffer.from([0xCF]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+      const encReq2 = await client.encode(request2);
+
+      const decoded = await server.decode(encReq2);
+      expect(decoded).toEqual(request2);
+    });
+
+    it('should still allow encode() of a fresh request while reboot recovery is pending', async () => {
+      const server = new OSCORE({ ...serverContext, status: OscoreContextStatus.Restored, ssn: 5n });
+
+      // Server should be able to encode outgoing requests even while reboot recovery is pending
+      // (encode uses the sender context, unaffected by receiver reboot state)
+      const request = generateCoap({
+        code: '0.01',
+        messageId: 0x7004,
+        token: Buffer.from([0xD0]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+
+      await expect(server.encode(request)).resolves.toBeDefined();
+    });
+  });
 });
 
 /**

@@ -36,6 +36,12 @@ export class ReplayWindow {
 
     reinit(currentSsn: bigint): void {
         this.highestSsn = currentSsn;
-        this.window = currentSsn >= 0n ? 1n : 0n;
+        // Fill the entire window so all SSNs <= currentSsn are marked as seen.
+        // This prevents replays of messages from before the restore point.
+        if (currentSsn >= 0n) {
+            this.window = (1n << BigInt(REPLAY_WINDOW_SIZE)) - 1n;
+        } else {
+            this.window = 0n;
+        }
     }
 }

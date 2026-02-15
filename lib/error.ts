@@ -78,3 +78,12 @@ export class OscoreProtocolError extends Error {
     Object.setPrototypeOf(this, OscoreProtocolError.prototype);
   }
 }
+
+export class OscoreRebootRecoveryError extends OscoreProtocolError {
+  public readonly decrypted: Buffer;
+  constructor(decrypted: Buffer) {
+    super(OscoreError.FIRST_REQUEST_AFTER_REBOOT, 'First request after reboot – Echo challenge required');
+    this.decrypted = decrypted;
+    Object.setPrototypeOf(this, OscoreRebootRecoveryError.prototype);
+  }
+}

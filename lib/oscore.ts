@@ -2,7 +2,7 @@ import EventEmitter from 'node:events';
 import {
     CODE_POST, CODE_CHANGED, OPTION_OSCORE, OPTION_OBSERVE,
     FLAG_KID, FLAG_KID_CTX, FLAG_PIV_MASK,
-    PAYLOAD_MARKER,
+    PAYLOAD_MARKER, MAX_INTERACTIONS,
 } from './constants';
 import {
     deserialize, serialize, isRequest, isEmptyAckOrRst,
@@ -14,7 +14,7 @@ import {
     SecurityContext, InteractionState, initSecurityContext,
     ssnToPiv, pivToSsn, createNonce, checkSsnOverflow,
 } from './context';
-import { OscoreError, OscoreProtocolError } from './error';
+import { OscoreError, OscoreProtocolError, OscoreRebootRecoveryError } from './error';
 
 export enum OscoreContextStatus {
     Fresh = 0,
@@ -35,6 +35,7 @@ export interface OscoreContext {
 export class OSCORE extends EventEmitter {
     private ctx: SecurityContext;
     private aead: AeadProvider;
+    private _rebootRecoveryPending: boolean;
 
     constructor(params: OscoreContext) {
         super();
@@ -45,6 +46,8 @@ export class OSCORE extends EventEmitter {
         const ssn = params.ssn ?? 0n;
         const isFresh = status === OscoreContextStatus.Fresh;
 
+        this._rebootRecoveryPending = !isFresh;
+
         this.ctx = initSecurityContext(
             params.masterSecret,
             params.masterSalt,
@@ -54,6 +57,10 @@ export class OSCORE extends EventEmitter {
             isFresh,
             ssn,
         );
+    }
+
+    clearRebootRecovery (): void {
+        this._rebootRecoveryPending = false;
     }
 
     private getInteractionOrThrow(token: Buffer): InteractionState {
@@ -76,6 +83,14 @@ export class OSCORE extends EventEmitter {
     ): void {
         const tokenHex = token.toString('hex');
         const existing = this.ctx.interactions.get(tokenHex);
+
+        // Prevent unbounded growth — reject new interactions if at capacity
+        if (!existing && this.ctx.interactions.size >= MAX_INTERACTIONS) {
+            throw new OscoreProtocolError(
+                OscoreError.OSCORE_MAX_INTERACTIONS,
+                'Maximum concurrent interactions reached',
+            );
+        }
         const interaction: InteractionState = existing ? {
             ...existing,
             requestKid: Buffer.from(requestKid),
@@ -108,6 +123,8 @@ export class OSCORE extends EventEmitter {
         this.ctx.interactions.delete(token.toString('hex'));
     }
 
+    // NOTE: SSN increment is not atomic. Callers MUST NOT invoke encode()
+    // concurrently on the same OSCORE instance — serialize access externally.
     encode = async (coapMessage: Buffer): Promise<Buffer> => {
         if (coapMessage.length === 0) {
             throw new OscoreProtocolError(OscoreError.NOT_VALID_INPUT_PACKET, 'Empty input');
@@ -380,27 +397,7 @@ export class OSCORE extends EventEmitter {
         // Merge U and E options
         const allOptions = mergeOptions(uOptions, eOptions);
 
-        // Reconstruct original CoAP packet
-        const outPkt = {
-            version: pkt.version,
-            type: pkt.type,
-            tokenLength: pkt.token.length,
-            code: originalCode,
-            messageId: pkt.messageId,
-            token: pkt.token,
-            options: allOptions,
-            payload: innerPayload,
-        };
-
-        const result = serialize(outPkt);
-
-        // Update replay window and store request context after successful decryption
-        if (isReq) {
-            this.ctx.replayWindow.update(pivToSsn(piv!));
-            this.upsertRequestInteraction(pkt.token, kid!, piv!, getObserveRequestAction(eOptions));
-        }
-
-        // Notification replay protection
+        // Notification replay protection — check before serialization to reject early
         if (!isReq && piv !== null) {
             const hasObserve = eOptions.some(o => o.number === OPTION_OBSERVE);
             if (hasObserve && interaction) {
@@ -416,14 +413,39 @@ export class OSCORE extends EventEmitter {
             }
         }
 
+        // Reconstruct original CoAP packet
+        const outPkt = {
+            version: pkt.version,
+            type: pkt.type,
+            tokenLength: pkt.token.length,
+            code: originalCode,
+            messageId: pkt.messageId,
+            token: pkt.token,
+            options: allOptions,
+            payload: innerPayload,
+        };
+
+        const result = serialize(outPkt);
+
+        // Reboot recovery: decrypt succeeded (sender is authentic) but replay window
+        // cannot be trusted. Throw with decrypted buffer so caller can inspect Echo option.
+        // Do NOT update replay window — that happens after Echo verification.
+        if (isReq && this._rebootRecoveryPending) {
+            throw new OscoreRebootRecoveryError(result);
+        }
+
+        // Update replay window and store request context after successful decryption
+        if (isReq) {
+            this.ctx.replayWindow.update(pivToSsn(piv!));
+            this.upsertRequestInteraction(pkt.token, kid!, piv!, getObserveRequestAction(eOptions));
+        }
+
         if (!isReq && interaction) {
             const hasObserve = eOptions.some(o => o.number === OPTION_OBSERVE);
             if (!hasObserve && piv === null) {
                 this.deleteInteractionIfOneOff(pkt.token, interaction);
             }
         }
-
-        this.emit('ssn', this.ctx.ssn);
 
         return result;
     };

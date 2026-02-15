@@ -44,6 +44,7 @@ export const MAX_SSN = 0xFFFFFFFFFF;     // 2^40 - 1, max SSN that fits in 5-byt
 export const MAX_PIV_LEN = 5;            // maximum PIV length in bytes
 export const MAX_SENDER_ID_LEN = 7;      // nonce structure allocates 7 bytes for sender ID
 export const REPLAY_WINDOW_SIZE = 32;    // sliding window size
+export const MAX_INTERACTIONS = 100;     // max concurrent token interactions to prevent DoS
 
 // OSCORE option flag masks (first byte of OSCORE option value)
 export const FLAG_KID = 0x08;            // bit 3: KID present
