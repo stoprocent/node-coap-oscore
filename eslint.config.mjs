@@ -10,6 +10,7 @@ export default tseslint.config(
       '**/dist/**',
       '**/example/**/*.js',
       '**/docs/**',
+      '**/test/**',
     ]
   },
   eslint.configs.recommended,
