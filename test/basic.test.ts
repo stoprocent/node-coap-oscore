@@ -1,6 +1,7 @@
 import { expect, describe, it, beforeEach, jest } from '@jest/globals';
 import { OSCORE, OscoreContextStatus, OscoreContext } from '../dist/index';
-import { createNonce } from '../dist/context';
+import { createNonce, ssnToPiv } from '../dist/context';
+import { createAAD, createEncStructure, defaultAeadProvider } from '../dist/crypto';
 import { generate as generateCoap, parse as parseCoap } from 'coap-packet';
 
 describe('OSCORE', () => {
@@ -729,6 +730,206 @@ describe('OSCORE', () => {
       const encReq = await client.encode(request);
 
       await expect(server.decode(encReq)).rejects.toThrow('KID Context does not match');
+    });
+  });
+
+  describe('Interaction cleanup', () => {
+    function interactionsSize(oscore: OSCORE): number {
+      return (oscore as any).ctx.interactions.size;
+    }
+
+    /**
+     * Build an OSCORE-protected response that includes a server-generated PIV,
+     * simulating a real device that uses fresh nonces for regular responses
+     * (valid per RFC 8613 §5.3 but node-oscore's own encode() omits PIV for
+     * non-observe responses).
+     */
+    function buildResponseWithServerPiv(
+      server: OSCORE,
+      token: Buffer,
+      codeClass: number,
+      codeDetail: number,
+      payload: Buffer,
+      messageId: number,
+    ): Buffer {
+      const ctx = (server as any).ctx;
+      const tokenHex = token.toString('hex');
+      const interaction = ctx.interactions.get(tokenHex);
+      if (!interaction) throw new Error('No server interaction for token');
+
+      // Server generates a fresh PIV from its own SSN
+      const piv = ssnToPiv(ctx.ssn);
+      ctx.ssn++;
+
+      // Build plaintext: [code_byte, 0xFF?, payload?]
+      const codeByte = (codeClass << 5) | codeDetail;
+      const parts: Buffer[] = [Buffer.from([codeByte])];
+      if (payload.length > 0) {
+        parts.push(Buffer.from([0xFF]));
+        parts.push(payload);
+      }
+      const plaintext = Buffer.concat(parts);
+
+      // Nonce: server's senderId + fresh PIV
+      const nonce = createNonce(ctx.senderId, piv, ctx.commonIv);
+
+      // AAD: always uses original request's KID and PIV
+      const aad = createAAD(interaction.requestKid, interaction.requestPiv);
+      const encStructure = createEncStructure(aad);
+
+      const ciphertext = defaultAeadProvider.encrypt(
+        ctx.senderKey, nonce, plaintext, encStructure,
+      );
+
+      // Clean up server-side interaction (normally done by server.encode)
+      ctx.interactions.delete(tokenHex);
+
+      // OSCORE option value: [flags, piv] — no KID for responses
+      const flags = piv.length & 0x07;
+      const oscoreOpt = Buffer.concat([Buffer.from([flags]), piv]);
+
+      // Outer CoAP: ACK (type=2), Code=2.04 Changed, OSCORE option, ciphertext
+      const tkl = token.length;
+      const header = Buffer.from([
+        0x60 | tkl,
+        0x44, // 2.04 Changed
+        (messageId >> 8) & 0xFF,
+        messageId & 0xFF,
+      ]);
+      const optHeader = Buffer.from([(9 << 4) | oscoreOpt.length]);
+
+      return Buffer.concat([
+        header, token, optHeader, oscoreOpt,
+        Buffer.from([0xFF]), ciphertext,
+      ]);
+    }
+
+    it('should clean up interaction after normal response (no PIV)', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 0n });
+      const server = new OSCORE({ ...serverContext });
+
+      const request = generateCoap({
+        code: '0.01', messageId: 0xA000, token: Buffer.from([0x01]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+      const encReq = await client.encode(request);
+      expect(interactionsSize(client)).toBe(1);
+
+      await server.decode(encReq);
+      const response = generateCoap({
+        ack: true, code: '2.05', messageId: 0xA000, token: Buffer.from([0x01]),
+        payload: Buffer.from('ok'),
+      });
+      const encResp = await server.encode(response);
+
+      await client.decode(encResp);
+      expect(interactionsSize(client)).toBe(0);
+    });
+
+    it('should clean up interaction after response WITH server PIV (RFC 8613 §5.3)', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 0n });
+      const server = new OSCORE({ ...serverContext });
+
+      const request = generateCoap({
+        code: '0.01', messageId: 0xA001, token: Buffer.from([0x02]),
+        options: [{ name: 'Uri-Path', value: Buffer.from('test') }],
+      });
+      const encReq = await client.encode(request);
+      expect(interactionsSize(client)).toBe(1);
+
+      await server.decode(encReq);
+
+      // Build response with PIV (simulates real device behavior)
+      const oscoreResp = buildResponseWithServerPiv(
+        server, Buffer.from([0x02]), 2, 5, Buffer.from('ok'), 0xA001,
+      );
+
+      await client.decode(oscoreResp);
+      expect(interactionsSize(client)).toBe(0);
+    });
+
+    it('should not exhaust interactions after >100 sequential requests (no PIV)', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 0n });
+      const server = new OSCORE({ ...serverContext });
+
+      for (let i = 0; i < 150; i++) {
+        const msgId = 0xB000 + i;
+        const token = Buffer.alloc(2);
+        token.writeUInt16BE(i);
+
+        const request = generateCoap({
+          code: '0.01', messageId: msgId, token,
+          options: [{ name: 'Uri-Path', value: Buffer.from('t') }],
+        });
+        const encReq = await client.encode(request);
+        await server.decode(encReq);
+
+        const response = generateCoap({
+          ack: true, code: '2.05', messageId: msgId, token,
+          payload: Buffer.from('r'),
+        });
+        const encResp = await server.encode(response);
+        await client.decode(encResp);
+      }
+
+      expect(interactionsSize(client)).toBe(0);
+      expect(interactionsSize(server)).toBe(0);
+    });
+
+    it('should not exhaust interactions after >100 sequential requests (with PIV)', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 0n });
+      const server = new OSCORE({ ...serverContext });
+
+      for (let i = 0; i < 150; i++) {
+        const msgId = 0xC000 + i;
+        const token = Buffer.alloc(2);
+        token.writeUInt16BE(i);
+
+        const request = generateCoap({
+          code: '0.01', messageId: msgId, token,
+          options: [{ name: 'Uri-Path', value: Buffer.from('t') }],
+        });
+        const encReq = await client.encode(request);
+        await server.decode(encReq);
+
+        const oscoreResp = buildResponseWithServerPiv(
+          server, token, 2, 5, Buffer.from('r'), msgId,
+        );
+        await client.decode(oscoreResp);
+      }
+
+      expect(interactionsSize(client)).toBe(0);
+    });
+
+    it('should preserve observe interaction across notifications', async () => {
+      const client = new OSCORE({ ...clientContext, ssn: 0n });
+      const server = new OSCORE({ ...serverContext });
+
+      const observeReq = generateCoap({
+        code: '0.01', messageId: 0xD000, token: Buffer.from([0x55]),
+        options: [
+          { name: 'Observe', value: Buffer.alloc(0) },
+          { name: 'Uri-Path', value: Buffer.from('temp') },
+        ],
+      });
+      const encReq = await client.encode(observeReq);
+      await server.decode(encReq);
+
+      const notif1 = generateCoap({
+        ack: true, code: '2.05', messageId: 0xD000, token: Buffer.from([0x55]),
+        options: [{ name: 'Observe', value: Buffer.from([0x01]) }],
+        payload: Buffer.from('25.0'),
+      });
+      await client.decode(await server.encode(notif1));
+      expect(interactionsSize(client)).toBe(1);
+
+      const notif2 = generateCoap({
+        ack: true, code: '2.05', messageId: 0xD001, token: Buffer.from([0x55]),
+        options: [{ name: 'Observe', value: Buffer.from([0x02]) }],
+        payload: Buffer.from('25.5'),
+      });
+      await client.decode(await server.encode(notif2));
+      expect(interactionsSize(client)).toBe(1);
     });
   });
 
