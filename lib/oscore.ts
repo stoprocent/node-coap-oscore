@@ -442,7 +442,7 @@ export class OSCORE extends EventEmitter {
 
         if (!isReq && interaction) {
             const hasObserve = eOptions.some(o => o.number === OPTION_OBSERVE);
-            if (!hasObserve && piv === null) {
+            if (!hasObserve) {
                 this.deleteInteractionIfOneOff(pkt.token, interaction);
             }
         }
