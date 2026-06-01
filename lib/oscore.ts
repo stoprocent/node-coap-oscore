@@ -256,8 +256,14 @@ export class OSCORE extends EventEmitter {
         // Parse OSCORE option value
         const { piv, kid, kidContext } = parseOscoreOptionValue(oscoreOpt.value);
 
-        // Determine if this is a request (has KID in OSCORE option) or response
-        const isReq = kid !== null;
+        // Determine request vs response by CoAP code class, NOT by KID presence.
+        // RFC 8613 §6.1 says responses SHALL NOT include KID, but some legacy
+        // servers include it in notifications anyway. Classifying by KID would
+        // misroute such notifications down the request path (wrong AAD → decode
+        // failure); the outer code class is the reliable signal and sends them
+        // down the response/notification path, which derives AAD from the stored
+        // observe-registration KID/PIV.
+        const isReq = isRequest(pkt);
 
         if (isReq) {
             // Verify KID matches recipientId
